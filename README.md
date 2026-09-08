@@ -1,4 +1,4 @@
-# SBBU: Stochastic Branch and Bound with Unity
+# SBBU: Symmetry-based Build-up
 
 A Python implementation of the SBBU algorithm for solving Distance Geometry Problems (DGP).
 This project is a Python port of the original C++ implementation:
@@ -59,6 +59,38 @@ SBBU solves the Distance Geometry Problem (DGP) by:
 1. **Initialization**: Places first 3 nodes using exact distance constraints
 2. **Sequential Extension**: Calculates positions for nodes 4,5,6,... using trilateration
 3. **Constraint Satisfaction**: Uses branch-and-bound with geometric reflections to satisfy long-range distance constraints
+
+For a complete graph of exact hard distances, an additional initializer selects four
+well-separated anchors and places all nodes in that shared frame. It factors only a
+`3 × 3` Gram matrix, avoiding sequential amplification of small rounding errors.
+Full- and lower-rank candidates are accepted only after checking **every original
+hard constraint** at the requested tolerance. Node IDs and the first-three-node
+coordinate convention are preserved. This is an extension of the reference SBBU
+implementation, not a global MDS fit or a continuous-optimization fallback.
+
+Sparse, interval, or soft-ambiguous inputs retain the reflection search. The same
+search is used if the initializer cannot produce an acceptable candidate. Local
+reflection enumeration selects the lowest-error candidate within `max_iterations`,
+rather than stopping at the first approximate tolerance pass for one edge. For
+complete coordinates or large search spaces, SBBU may instead finish sequential
+placement and stop after validating **all** original hard constraints. Rejected
+trial completions restore the search state. The `max_time` budget is checked across
+initialization, search, refinement, and final validation.
+
+### Numerical scope
+
+- `distance_tolerance` is a maximum absolute hard-constraint violation, not an
+  inferred measurement uncertainty or a tolerance that is increased on failure.
+- Input scalar values are retained in double-precision computation; converting
+  float32 input cannot recover precision already lost in the supplied distances.
+- Solving every noisy or degenerate instance is **not guaranteed**. In particular,
+  uncertain sequential interval distances are unsupported by the existing
+  exact-sequential constraint model.
+- Failure to find a realization is not a global mathematical infeasibility
+  certificate. Search budgets and numerical conditioning can cause failure.
+- Exact coordinate permutation equivariance is not promised: coordinate frames,
+  reflections, and nonunique sparse realizations can differ. Returned coordinates
+  always use the original node indices and must pass the original constraints.
 
 ## Input Formats
 

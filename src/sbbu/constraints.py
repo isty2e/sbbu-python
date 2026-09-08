@@ -2,6 +2,7 @@
 Distance constraint representations for SBBU algorithm.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -37,7 +38,7 @@ class DistanceConstraint:
     lower_bound: float  # Minimum distance
     upper_bound: float | None = None  # Maximum distance (None = no upper bound)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if (
             isinstance(self.i, bool)
             or isinstance(self.j, bool)
@@ -49,20 +50,20 @@ class DistanceConstraint:
             )
         if self.i >= self.j:
             raise ValueError(f"i ({self.i}) must be less than j ({self.j})")
-        if not np.isfinite(self.lower_bound):
-            raise ValueError(
-                f"lower_bound must be finite, got {self.lower_bound}"
-            )
+        if not math.isfinite(self.lower_bound):
+            raise ValueError(f"lower_bound must be finite, got {self.lower_bound}")
         if self.lower_bound <= 0:
             raise ValueError(f"lower_bound must be positive, got {self.lower_bound}")
-        if self.upper_bound is not None and not np.isfinite(self.upper_bound):
-            raise ValueError(
-                f"upper_bound must be finite, got {self.upper_bound}"
-            )
+        if self.upper_bound is not None and not math.isfinite(self.upper_bound):
+            raise ValueError(f"upper_bound must be finite, got {self.upper_bound}")
         if self.upper_bound is not None and self.upper_bound <= self.lower_bound:
             raise ValueError(
                 f"upper_bound ({self.upper_bound}) must be greater than lower_bound ({self.lower_bound})"
             )
+
+        object.__setattr__(self, "lower_bound", float(self.lower_bound))
+        if self.upper_bound is not None:
+            object.__setattr__(self, "upper_bound", float(self.upper_bound))
 
     @property
     def distance(self) -> float:
@@ -132,6 +133,12 @@ class ConstraintSet:
             )
 
         for (i, j), pair_constraints in sorted(constraints_by_pair.items()):
+            if len(pair_constraints) == 1 and pair_constraints[0].upper_bound is None:
+                constraint = pair_constraints[0]
+                self._hard_constraints.append(constraint)
+                self._constraint_lookup[(i, j)] = constraint
+                continue
+
             if j - i <= 3:
                 sequential_constraint = self._build_sequential_constraint(
                     i, j, pair_constraints
@@ -230,6 +237,29 @@ class ConstraintSet:
             Hard constraints produced after duplicate/conflict normalization.
         """
         return list(self._hard_constraints)
+
+    def get_complete_distance_matrix(self) -> NDArray[np.float64] | None:
+        """Return exact hard distances only when they cover every node pair.
+
+        Returns
+        -------
+        NDArray[np.float64] | None
+            A new symmetric ``(num_nodes, num_nodes)`` matrix in original node
+            order, or ``None`` for fewer than four nodes, missing hard pairs,
+            or interval constraints. Soft alternatives are never promoted.
+        """
+        if self.num_nodes < 4 or len(self._hard_constraints) != (
+            self.num_nodes * (self.num_nodes - 1) // 2
+        ):
+            return None
+        if any(c.upper_bound is not None for c in self._hard_constraints):
+            return None
+
+        distances = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float64)
+        for constraint in self._hard_constraints:
+            distances[constraint.i, constraint.j] = constraint.lower_bound
+            distances[constraint.j, constraint.i] = constraint.lower_bound
+        return distances
 
     def get_sequential_constraints(self) -> list[DistanceConstraint]:
         """
@@ -405,7 +435,9 @@ class ConstraintSet:
                                 f"({i}, {j}) is missing (NaN)"
                             )
                         continue
-                    raise ValueError(f"Distance at ({i}, {j}) must be finite, got {dist}")
+                    raise ValueError(
+                        f"Distance at ({i}, {j}) must be finite, got {dist}"
+                    )
 
                 if np.isinf(dist):
                     if ignore_inf:
@@ -415,7 +447,9 @@ class ConstraintSet:
                                 f"({i}, {j}) is missing (infinite)"
                             )
                         continue
-                    raise ValueError(f"Distance at ({i}, {j}) must be finite, got {dist}")
+                    raise ValueError(
+                        f"Distance at ({i}, {j}) must be finite, got {dist}"
+                    )
 
                 if dist <= 0:
                     if ignore_zero:
