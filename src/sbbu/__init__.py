@@ -1,5 +1,5 @@
 """
-Modern SBBU (Stochastic Branch and Bound with Unity) implementation.
+SBBU (Symmetry-based Build-up) implementation.
 
 This package provides a pythonic, modular implementation of the SBBU algorithm
 for solving Distance Geometry Problems (DGP) from various input sources.
@@ -35,10 +35,10 @@ except PackageNotFoundError:
     __version__ = "0+unknown"
 
 __all__ = [
-    "solve_from_nmr",
-    "solve_from_distance_matrix",
-    "solve_from_edge_list",
-    "create_test_constraints",
     "SBBUConfig",
     "SBBUSolver",
+    "create_test_constraints",
+    "solve_from_distance_matrix",
+    "solve_from_edge_list",
+    "solve_from_nmr",
 ]

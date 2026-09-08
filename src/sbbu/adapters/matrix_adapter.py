@@ -123,7 +123,9 @@ class MatrixAdapter:
             raise ValueError("Adjacency and distance matrices must have same shape")
         if not np.array_equal(adjacency_matrix, adjacency_matrix.T):
             raise ValueError("Adjacency matrix must be symmetric")
-        if not np.allclose(distance_matrix, distance_matrix.T, atol=1e-12, equal_nan=True):
+        if not np.allclose(
+            distance_matrix, distance_matrix.T, atol=1e-12, equal_nan=True
+        ):
             raise ValueError("Distance matrix must be symmetric")
 
         num_nodes = adjacency_matrix.shape[0]
@@ -135,8 +137,7 @@ class MatrixAdapter:
                     dist = distance_matrix[i, j]
                     if np.isnan(dist) or np.isinf(dist) or dist <= 0:
                         raise ValueError(
-                            "Connected edge "
-                            f"({i}, {j}) has invalid distance {dist}"
+                            f"Connected edge ({i}, {j}) has invalid distance {dist}"
                         )
                     constraints.append(DistanceConstraint(i, j, dist))
 
@@ -221,24 +222,16 @@ class MatrixAdapter:
         if not np.allclose(np.diag(distance_matrix), 0.0, atol=tolerance):
             return False
 
-        # Check symmetry (ignoring NaN values)
-        for i in range(distance_matrix.shape[0]):
-            for j in range(i + 1, distance_matrix.shape[1]):
-                val_ij = distance_matrix[i, j]
-                val_ji = distance_matrix[j, i]
-
-                # Both NaN is OK
-                if np.isnan(val_ij) and np.isnan(val_ji):
-                    continue
-
-                # One NaN, one not NaN is not OK
-                if np.isnan(val_ij) != np.isnan(val_ji):
-                    return False
-
-                # Both non-NaN should be close
-                if not np.isnan(val_ij) and not np.isclose(
-                    val_ij, val_ji, atol=tolerance
-                ):
-                    return False
-
-        return True
+        rows, columns = np.triu_indices(distance_matrix.shape[0], k=1)
+        # Match scalar isclose promotion across NumPy versions.
+        comparison_dtype = np.result_type(distance_matrix.dtype.type(0), 1.0)
+        return bool(
+            np.all(
+                np.isclose(
+                    distance_matrix[rows, columns].astype(comparison_dtype, copy=False),
+                    distance_matrix[columns, rows].astype(comparison_dtype, copy=False),
+                    atol=tolerance,
+                    equal_nan=True,
+                )
+            )
+        )

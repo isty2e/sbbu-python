@@ -13,7 +13,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..constraints import ConstraintSet, DistanceConstraint
-from ..geometry import normalize_vector, quadratic_solver_point
+from ..geometry import clique_realizations, normalize_vector, quadratic_solver_point
 from ..timer import get_wall_time
 from ..validation import validate_positive_float
 from .cluster import ReflectionCluster, UnionFind
@@ -23,8 +23,8 @@ from .types import (
     ProblemState,
     RefinementContext,
     SBBUConfig,
-    SBBUStats,
     SBBUSolveInfeasibleError,
+    SBBUStats,
     SBBUTimeoutError,
 )
 
@@ -44,7 +44,9 @@ class SBBUSolver:
         used.
     """
 
-    def __init__(self, constraints: ConstraintSet, config: SBBUConfig | None = None):
+    def __init__(
+        self, constraints: ConstraintSet, config: SBBUConfig | None = None
+    ) -> None:
         """Initialize the SBBU branch-and-bound solver.
 
         Parameters
@@ -184,6 +186,31 @@ class SBBUSolver:
 
         state.current_node = 2
 
+    def _initialize_complete_graph(self, state: ProblemState) -> bool:
+        distances = self.constraints.get_complete_distance_matrix()
+        if distances is None:
+            return False
+        self._check_time_limit()
+        for coordinates in clique_realizations(distances):
+            self._check_time_limit()
+            if self._satisfies_hard_constraints(coordinates):
+                state.coordinates[:] = coordinates
+                state.current_node = self.constraints.num_nodes - 1
+                state.stats.constraints_processed = len(self.long_range_constraints)
+                return True
+        return False
+
+    def _satisfies_hard_constraints(self, coordinates: NDArray[np.float64]) -> bool:
+        return bool(
+            np.isfinite(coordinates).all()
+            and np.all(
+                self._metrics_calculator.constraint_errors(
+                    self.constraints.get_hard_constraints(), coordinates
+                )
+                <= self.config.distance_tolerance
+            )
+        )
+
     def _get_exact_distance(self, i: int, j: int) -> float:
         """
         Get an exact distance value for sequential trilateration constraints.
@@ -213,6 +240,12 @@ class SBBUSolver:
             self._check_time_limit()
             self.solve_constraint(constraint)
             state.stats.constraints_processed = index + 1
+            if (
+                state.current_node == self.constraints.num_nodes - 1
+                and self._satisfies_hard_constraints(state.coordinates)
+            ):
+                state.stats.constraints_processed = len(self.long_range_constraints)
+                return
 
     def _extend_to_node(self, target_node: int) -> None:
         """Extend the coordinate array to include nodes up to target_node."""
@@ -326,13 +359,9 @@ class SBBUSolver:
         state = self._state_required()
         num_clusters = len(state.clusters)
         if root_i < 0 or root_i >= num_clusters:
-            raise ValueError(
-                f"root_i {root_i} out of range [0, {num_clusters - 1}]"
-            )
+            raise ValueError(f"root_i {root_i} out of range [0, {num_clusters - 1}]")
         if root_j < 0 or root_j >= num_clusters:
-            raise ValueError(
-                f"root_j {root_j} out of range [0, {num_clusters - 1}]"
-            )
+            raise ValueError(f"root_j {root_j} out of range [0, {num_clusters - 1}]")
 
         cr = state.clusters[root_i]  # C++ cr = m_c[r]
         cj = state.clusters[root_j]  # C++ cj = m_c[j]
@@ -388,6 +417,32 @@ class SBBUSolver:
 
         return cr
 
+    def _try_complete_reflection(
+        self, state: ProblemState, cluster: ReflectionCluster
+    ) -> bool:
+        previous_coordinates = state.coordinates.copy()
+        previous_node = state.current_node
+        accepted = False
+        try:
+            cluster.reflect_all_nodes(
+                state.cluster_nodes[: state.num_cluster_nodes],
+                state.reflection_flags[: state.num_cluster_nodes],
+            )
+            try:
+                self._extend_to_node(self.constraints.num_nodes - 1)
+            except SBBUTimeoutError:
+                raise
+            except (ValueError, RuntimeError):
+                return False
+            satisfies = self._satisfies_hard_constraints(state.coordinates)
+            self._check_time_limit()
+            accepted = satisfies
+            return accepted
+        finally:
+            if not accepted:
+                state.coordinates[:] = previous_coordinates
+                state.current_node = previous_node
+
     def _branch_and_bound_search(
         self, constraint: DistanceConstraint, cluster: ReflectionCluster
     ) -> None:
@@ -420,17 +475,25 @@ class SBBUSolver:
                 constraint, current_distance
             )
 
+            # A local tolerance pass is insufficient. Try whole-problem completion
+            # for full coordinates or potentially expensive search spaces.
+            if (
+                error <= self.config.distance_tolerance
+                and (
+                    state.current_node == self.constraints.num_nodes - 1
+                    or max_states > self.constraints.num_nodes**2
+                )
+                and self._try_complete_reflection(state, cluster)
+            ):
+                state.stats.iterations_used += evaluated_states
+                return
+
             if error < min_error:
                 min_error = error
                 state.best_reflection_flags[:num_decisions] = state.reflection_flags[
                     :num_decisions
                 ]
                 best_found = True
-
-                # No need to keep searching once the current state satisfies the bound.
-                if error <= self.config.distance_tolerance:
-                    evaluated_states += 1
-                    break
 
             evaluated_states += 1
             if evaluated_states >= max_states:
@@ -529,8 +592,8 @@ class SBBUSolver:
                         self.config.soft_pruning_max_rounds,
                     )
 
-            # Process all long-range constraints
-            self._process_long_range_constraints(state)
+            if not self._initialize_complete_graph(state):
+                self._process_long_range_constraints(state)
 
             # Finalize solution
             self._check_time_limit()
@@ -650,21 +713,25 @@ class SBBUSolver:
     def _validate_solution(self) -> None:
         """Validate that all constraints are satisfied."""
         state = self._state_required()
-        for constraint in self.constraints.get_hard_constraints():
-            pos_i = state.coordinates[constraint.i]
-            pos_j = state.coordinates[constraint.j]
-            actual_distance = float(np.linalg.norm(pos_i - pos_j))
-            error = self._metrics_calculator.constraint_violation(
-                constraint, actual_distance
+        constraints = self.constraints.get_hard_constraints()
+        errors = self._metrics_calculator.constraint_errors(
+            constraints, state.coordinates
+        )
+        violations = np.flatnonzero(errors > self.config.distance_tolerance)
+        if violations.size:
+            index = int(violations[0])
+            constraint = constraints[index]
+            actual_distance = float(
+                np.linalg.norm(
+                    state.coordinates[constraint.i] - state.coordinates[constraint.j]
+                )
             )
             lower, upper = self._metrics_calculator.constraint_bounds(constraint)
-
-            if error > self.config.distance_tolerance:
-                raise SBBUSolveInfeasibleError(
-                    f"Constraint ({constraint.i}, {constraint.j}) not satisfied: "
-                    f"expected in [{lower:.6f}, {upper:.6f}], got {actual_distance:.6f} "
-                    f"(error = {error:.6e} > tolerance = {self.config.distance_tolerance:.6e})"
-                )
+            raise SBBUSolveInfeasibleError(
+                f"Constraint ({constraint.i}, {constraint.j}) not satisfied: "
+                f"expected in [{lower:.6f}, {upper:.6f}], got {actual_distance:.6f} "
+                f"(error = {errors[index]:.6e} > tolerance = {self.config.distance_tolerance:.6e})"
+            )
 
     @property
     def solution_coordinates(self) -> NDArray[np.float64]:

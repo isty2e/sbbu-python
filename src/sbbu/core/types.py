@@ -2,8 +2,8 @@
 Core runtime and configuration types for the SBBU solver.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,7 +18,7 @@ class SBBUTimeoutError(RuntimeError):
 
 
 class SBBUSolveInfeasibleError(RuntimeError):
-    """Signal that the current constraint set is infeasible for SBBU solving."""
+    """Signal that SBBU could not satisfy a constraint within its search limits."""
 
 
 @dataclass
