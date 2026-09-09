@@ -2,7 +2,7 @@
 
 import pytest
 
-import sbbu.timer as timer
+from sbbu import timer
 
 
 @pytest.mark.unit

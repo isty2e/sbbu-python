@@ -527,19 +527,19 @@ def test_nmr_adapter_verbose_output_does_not_write_stdout(tmp_path, capsys):
 def test_adapter_error_handling():
     """Test adapter error handling."""
     # MatrixAdapter errors
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         # Non-square matrix
         bad_matrix = np.array([[1, 2, 3]])
         MatrixAdapter.from_distance_matrix(bad_matrix)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         # Mismatched adjacency and distance matrices
         adj = np.array([[0, 1], [1, 0]])
         dist = np.array([[0, 1, 2], [1, 0, 1], [2, 1, 0]])
         MatrixAdapter.from_adjacency_matrix(adj, dist)
 
     # Edge list errors
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         # Negative distance
         bad_edges = [(0, 1, -1.0, -1.0)]
         MatrixAdapter.from_edge_list(2, bad_edges)

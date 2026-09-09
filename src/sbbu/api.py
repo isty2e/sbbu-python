@@ -234,22 +234,23 @@ def create_test_constraints(
 
     Raises
     ------
+    TypeError
+        If ``num_nodes`` is not an integer, or ``connectivity`` or ``noise_level``
+        is not an integer or float. Booleans are not accepted.
     ValueError
-        If ``num_nodes`` is not a positive integer, ``connectivity`` is not
-        finite within ``[0.0, 1.0]``, or ``noise_level`` is negative/non-finite.
+        If ``num_nodes`` is nonpositive, ``connectivity`` is not finite within
+        ``[0.0, 1.0]``, or ``noise_level`` is negative/nonfinite.
     """
-    if isinstance(num_nodes, bool) or not isinstance(num_nodes, int) or num_nodes <= 0:
-        raise ValueError(f"num_nodes must be a positive integer, got {num_nodes}")
+    if isinstance(num_nodes, bool) or not isinstance(num_nodes, int):
+        raise TypeError(f"num_nodes must be an integer, got {num_nodes}")
+    if num_nodes <= 0:
+        raise ValueError(f"num_nodes must be positive, got {num_nodes}")
     if isinstance(connectivity, bool) or not isinstance(connectivity, (int, float)):
-        raise ValueError(
-            f"connectivity must be a finite float in [0, 1], got {connectivity}"
-        )
+        raise TypeError(f"connectivity must be an integer or float, got {connectivity}")
     if not np.isfinite(connectivity) or not (0.0 <= float(connectivity) <= 1.0):
         raise ValueError(f"connectivity must be in [0, 1], got {connectivity}")
     if isinstance(noise_level, bool) or not isinstance(noise_level, (int, float)):
-        raise ValueError(
-            f"noise_level must be a finite non-negative float, got {noise_level}"
-        )
+        raise TypeError(f"noise_level must be an integer or float, got {noise_level}")
     if not np.isfinite(noise_level) or float(noise_level) < 0.0:
         raise ValueError(f"noise_level must be non-negative, got {noise_level}")
 

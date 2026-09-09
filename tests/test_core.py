@@ -78,7 +78,7 @@ def test_constraint_validation_rejects_non_integer_indices(indices):
 @pytest.mark.unit
 def test_constraint_set_creation(simple_tetrahedron):
     """Test creating constraint sets."""
-    true_coords, constraint_set = simple_tetrahedron
+    _true_coords, constraint_set = simple_tetrahedron
 
     assert constraint_set.num_nodes == 4
     assert len(constraint_set.constraints) == 6  # Complete graph
@@ -611,7 +611,7 @@ def test_first_three_nodes_initialization(simple_tetrahedron):
 @pytest.mark.unit
 def test_core_solver_simple_case(simple_tetrahedron, sbbu_config_fast):
     """Test core solver on simple tetrahedron."""
-    true_coords, constraint_set = simple_tetrahedron
+    _true_coords, constraint_set = simple_tetrahedron
 
     solver = SBBUSolver(constraint_set, sbbu_config_fast)
     stats = solver.solve()
@@ -916,7 +916,7 @@ def test_branch_search_checks_time_limit(simple_tetrahedron):
     def forced_timeout() -> None:
         raise RuntimeError("forced-time-check")
 
-    setattr(solver, "_check_time_limit", forced_timeout)
+    solver._check_time_limit = forced_timeout
 
     with pytest.raises(RuntimeError, match="forced-time-check"):
         solver._branch_and_bound_search(DistanceConstraint(0, 3, 1.7, 1.7), cluster)
@@ -949,7 +949,7 @@ def test_branch_search_checks_time_limit_each_state(simple_tetrahedron):
     def count_time_check() -> None:
         check_calls["count"] += 1
 
-    setattr(solver, "_check_time_limit", count_time_check)
+    solver._check_time_limit = count_time_check
 
     with pytest.raises(RuntimeError, match="could not be solved"):
         solver._branch_and_bound_search(DistanceConstraint(0, 3, 1.7, 1.7), cluster)
@@ -1090,7 +1090,7 @@ def test_extend_to_node_checks_time_limit():
     def forced_timeout() -> None:
         raise RuntimeError("forced-extend-time-check")
 
-    setattr(solver, "_check_time_limit", forced_timeout)
+    solver._check_time_limit = forced_timeout
 
     with pytest.raises(RuntimeError, match="forced-extend-time-check"):
         solver._extend_to_node(constraint_set.num_nodes - 1)
