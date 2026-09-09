@@ -4,6 +4,7 @@ High-level API for SBBU algorithm.
 This module provides convenient functions for common SBBU use cases.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,7 @@ def solve_from_nmr(
     Exception
         Raised when loading input, constructing configuration, or solving fails.
     """
-    constraints = NMRAdapter.from_nmr_file(nmr_file, distance_tolerance)
+    constraints = NMRAdapter.from_nmr_file(nmr_file)
     config = SBBUConfig(
         distance_tolerance=distance_tolerance, max_time=max_time, verbose=verbose
     )
@@ -109,9 +110,62 @@ def solve_from_distance_matrix(
     return solver.solution_coordinates, stats
 
 
+def solve_from_bounds_matrices(
+    lower_bounds: NDArray[np.float64],
+    upper_bounds: NDArray[np.float64],
+    distance_tolerance: float = 1e-7,
+    max_time: float = 60.0,
+    verbose: bool = True,
+    *,
+    ignore_nan: bool = True,
+) -> tuple[NDArray[np.float64], SBBUStats]:
+    """Solve from paired distance-bound matrices.
+
+    Parameters
+    ----------
+    lower_bounds : NDArray[np.float64]
+        Symmetric square lower bounds with zero diagonal.
+    upper_bounds : NDArray[np.float64]
+        Same-shaped symmetric upper bounds with zero diagonal. Equal endpoints
+        denote exact distances; SBBU requires exact sequential predecessors.
+    distance_tolerance : float, default=1e-7
+        Absolute tolerance for accepting constraint violations, not for deciding
+        whether an input interval is exact.
+    max_time : float, default=60.0
+        Maximum solving time in seconds.
+    verbose : bool, default=True
+        Whether to emit solver progress logs.
+    ignore_nan : bool, default=True
+        Omit pairs with matching NaNs in both bounds and directions.
+
+    Returns
+    -------
+    tuple[NDArray[np.float64], SBBUStats]
+        Coordinates in input node order and solver statistics.
+
+    Raises
+    ------
+    ValueError
+        If matrix bounds are invalid or required exact predecessors are absent.
+    SBBUSolveInfeasibleError
+        If the bounded search cannot satisfy the hard constraints.
+    SBBUTimeoutError
+        If the solve exceeds the time limit.
+    """
+    constraints = MatrixAdapter.from_bounds_matrices(
+        lower_bounds, upper_bounds, ignore_nan=ignore_nan
+    )
+    config = SBBUConfig(
+        distance_tolerance=distance_tolerance, max_time=max_time, verbose=verbose
+    )
+    solver = SBBUSolver(constraints, config)
+    stats = solver.solve()
+    return solver.solution_coordinates, stats
+
+
 def solve_from_edge_list(
     num_nodes: int,
-    edges: list[tuple[int, int, float]],
+    edges: Sequence[tuple[int, int, float, float]],
     distance_tolerance: float = 1e-7,
     max_time: float = 60.0,
     verbose: bool = True,
@@ -123,8 +177,9 @@ def solve_from_edge_list(
     ----------
     num_nodes : int
         Total number of nodes.
-    edges : list[tuple[int, int, float]]
-        Distance constraints as ``(i, j, distance)`` tuples.
+    edges : Sequence[tuple[int, int, float, float]]
+        Distance constraints as ``(i, j, lower_bound, upper_bound)`` tuples.
+        Equal bounds specify an exact distance.
     distance_tolerance : float, default=1e-7
         Distance tolerance used by the solver.
     max_time : float, default=60.0
@@ -179,22 +234,23 @@ def create_test_constraints(
 
     Raises
     ------
+    TypeError
+        If ``num_nodes`` is not an integer, or ``connectivity`` or ``noise_level``
+        is not an integer or float. Booleans are not accepted.
     ValueError
-        If ``num_nodes`` is not a positive integer, ``connectivity`` is not
-        finite within ``[0.0, 1.0]``, or ``noise_level`` is negative/non-finite.
+        If ``num_nodes`` is nonpositive, ``connectivity`` is not finite within
+        ``[0.0, 1.0]``, or ``noise_level`` is negative/nonfinite.
     """
-    if (
-        isinstance(num_nodes, bool)
-        or not isinstance(num_nodes, int)
-        or num_nodes <= 0
-    ):
-        raise ValueError(f"num_nodes must be a positive integer, got {num_nodes}")
+    if isinstance(num_nodes, bool) or not isinstance(num_nodes, int):
+        raise TypeError(f"num_nodes must be an integer, got {num_nodes}")
+    if num_nodes <= 0:
+        raise ValueError(f"num_nodes must be positive, got {num_nodes}")
     if isinstance(connectivity, bool) or not isinstance(connectivity, (int, float)):
-        raise ValueError(f"connectivity must be a finite float in [0, 1], got {connectivity}")
+        raise TypeError(f"connectivity must be an integer or float, got {connectivity}")
     if not np.isfinite(connectivity) or not (0.0 <= float(connectivity) <= 1.0):
         raise ValueError(f"connectivity must be in [0, 1], got {connectivity}")
     if isinstance(noise_level, bool) or not isinstance(noise_level, (int, float)):
-        raise ValueError(f"noise_level must be a finite non-negative float, got {noise_level}")
+        raise TypeError(f"noise_level must be an integer or float, got {noise_level}")
     if not np.isfinite(noise_level) or float(noise_level) < 0.0:
         raise ValueError(f"noise_level must be non-negative, got {noise_level}")
 
@@ -240,6 +296,7 @@ def create_test_constraints(
             noisy_dist = max(0.1, true_dist + noise)
         else:
             noisy_dist = true_dist
-        edges.append((i, j, noisy_dist))
+        distance = float(noisy_dist)
+        edges.append((i, j, distance, distance))
 
     return MatrixAdapter.from_edge_list(num_nodes, edges)

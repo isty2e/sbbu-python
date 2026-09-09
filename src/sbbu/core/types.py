@@ -162,13 +162,29 @@ class ProblemState:
 
 @dataclass
 class RefinementContext:
-    """Dependencies and state required by one refinement run."""
+    """Dependencies and state required by one refinement run.
+
+    Parameters
+    ----------
+    state : ProblemState
+        Runtime coordinates and statistics updated during refinement.
+    config : SBBUConfig
+        Refinement policy and numerical acceptance limits.
+    num_nodes : int
+        Number of nodes in the original problem.
+    hard_constraints : list[DistanceConstraint]
+        Canonical hard constraints for the initial realization.
+    check_time_limit : Callable[[], None]
+        Check the enclosing solve deadline, raising when its budget is exhausted.
+    run_refinement_solve : Callable
+        Solve a supplied list of hard constraints, returning coordinates and
+        statistics or raising on failure.
+    """
 
     state: ProblemState
     config: SBBUConfig
     num_nodes: int
     hard_constraints: list[DistanceConstraint]
-    constraint_violation: Callable[[DistanceConstraint, float], float]
     check_time_limit: Callable[[], None]
     run_refinement_solve: Callable[
         [list[DistanceConstraint]], tuple[NDArray[np.float64], SBBUStats]

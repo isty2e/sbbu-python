@@ -70,7 +70,7 @@ def simple_tetrahedron() -> tuple[np.ndarray, ConstraintSet]:
     for i in range(n):
         for j in range(i + 1, n):
             dist = float(np.linalg.norm(true_coords[i] - true_coords[j]))
-            constraints.append(DistanceConstraint(i, j, dist))
+            constraints.append(DistanceConstraint(i, j, dist, dist))
 
     constraint_set = ConstraintSet(n, constraints)
     return true_coords, constraint_set
@@ -103,13 +103,13 @@ def simple_chain() -> tuple[np.ndarray, ConstraintSet]:
     for i in range(n):
         for j in range(i + 1, min(i + 4, n)):
             dist = float(np.linalg.norm(true_coords[i] - true_coords[j]))
-            constraints.append(DistanceConstraint(i, j, dist))
+            constraints.append(DistanceConstraint(i, j, dist, dist))
 
     # Add a few long-range constraints
     for i, j in [(0, 4)]:  # End-to-end distance
         if j < n:
             dist = float(np.linalg.norm(true_coords[i] - true_coords[j]))
-            constraints.append(DistanceConstraint(i, j, dist))
+            constraints.append(DistanceConstraint(i, j, dist, dist))
 
     constraint_set = ConstraintSet(n, constraints)
     return true_coords, constraint_set
@@ -158,16 +158,16 @@ def sparse_distance_matrix() -> np.ndarray:
 
 
 @pytest.fixture
-def edge_list_simple() -> tuple[int, list[tuple[int, int, float]]]:
+def edge_list_simple() -> tuple[int, list[tuple[int, int, float, float]]]:
     """Simple edge list for testing."""
     num_nodes = 4
     edges = [
-        (0, 1, 1.0),
-        (1, 2, 1.0),
-        (2, 3, 1.0),
-        (0, 2, 1.414),
-        (1, 3, 1.414),
-        (0, 3, 1.732),
+        (0, 1, 1.0, 1.0),
+        (1, 2, 1.0, 1.0),
+        (2, 3, 1.0, 1.0),
+        (0, 2, 1.414, 1.414),
+        (1, 3, 1.414, 1.414),
+        (0, 3, 1.732, 1.732),
     ]
     return num_nodes, edges
 

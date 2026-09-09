@@ -101,8 +101,8 @@ def test_symmetric_cube_relabeling(permutation_seed):
 @pytest.mark.parametrize("scalar_type", [float, np.float32, np.float64])
 def test_distance_scalars_are_normalized_before_arithmetic(scalar_type):
     value = scalar_type(1.3734981)
-    constraint = DistanceConstraint(0, 1, value)
-    assert constraint.distance**2 == float(value) ** 2
+    constraint = DistanceConstraint(0, 1, value, value)
+    assert constraint.lower_bound**2 == float(value) ** 2
 
 
 def test_inconsistent_complete_matrix_is_not_published():
@@ -123,13 +123,15 @@ def test_interval_and_ambiguous_edges_keep_their_meanings():
     points = np.random.RandomState(8).normal(size=(10, 3))
     supplied = distances_of(points)
     constraints = [
-        DistanceConstraint(i, j, float(supplied[i, j]))
+        DistanceConstraint(i, j, float(supplied[i, j]), float(supplied[i, j]))
         for i in range(10)
         for j in range(i + 1, min(i + 4, 10))
     ]
     distance = float(supplied[0, 4])
     constraints.append(DistanceConstraint(0, 4, distance - 0.1, distance + 0.1))
-    constraints.extend([DistanceConstraint(0, 9, 1.0), DistanceConstraint(0, 9, 100.0)])
+    constraints.extend(
+        [DistanceConstraint(0, 9, 1.0, 1.0), DistanceConstraint(0, 9, 100.0, 100.0)]
+    )
     constraint_set = ConstraintSet(10, constraints)
     solver = SBBUSolver(
         constraint_set,
@@ -138,22 +140,18 @@ def test_interval_and_ambiguous_edges_keep_their_meanings():
     solver.solve()
     actual = distances_of(solver.solution_coordinates)
     for constraint in constraint_set.get_hard_constraints():
-        assert (
-            MetricsCalculator.constraint_violation(
-                constraint, float(actual[constraint.i, constraint.j])
-            )
-            <= 1e-6
-        )
+        assert constraint.violation(float(actual[constraint.i, constraint.j])) <= 1e-6
     assert len(constraint_set.get_soft_ambiguous_constraints()) == 1
 
 
 @pytest.mark.parametrize("distance", [0.0, 1.0, 1.5, 2.0, 3.0, np.nan, np.inf])
 def test_bulk_constraint_errors_match_scalar_semantics(distance):
-    constraints = [DistanceConstraint(0, 1, 1.5), DistanceConstraint(0, 1, 1.0, 2.0)]
-    coordinates = np.array([[0.0, 0.0, 0.0], [distance, 0.0, 0.0]])
-    expected = [
-        MetricsCalculator.constraint_violation(c, distance) for c in constraints
+    constraints = [
+        DistanceConstraint(0, 1, 1.5, 1.5),
+        DistanceConstraint(0, 1, 1.0, 2.0),
     ]
+    coordinates = np.array([[0.0, 0.0, 0.0], [distance, 0.0, 0.0]])
+    expected = [c.violation(distance) for c in constraints]
     np.testing.assert_array_equal(
         MetricsCalculator.constraint_errors(constraints, coordinates), expected
     )
@@ -177,7 +175,7 @@ def test_complete_projection_preserves_canonical_constraints():
         for c in constraints
     ]
     assert ConstraintSet(5, bounded).get_complete_distance_matrix() is None
-    ambiguous = constraints + [DistanceConstraint(0, 4, 100.0)]
+    ambiguous = constraints + [DistanceConstraint(0, 4, 100.0, 100.0)]
     assert ConstraintSet(5, ambiguous).get_complete_distance_matrix() is None
 
 

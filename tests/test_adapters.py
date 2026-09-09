@@ -8,6 +8,7 @@ import pytest
 import sbbu
 from sbbu.adapters import MatrixAdapter, NMRAdapter
 from sbbu.constraints import ConstraintSet, DistanceConstraint
+from sbbu.core.solver import SBBUSolver
 
 
 @pytest.mark.unit
@@ -46,7 +47,7 @@ def test_matrix_adapter_from_distance_matrix_respects_ignore_zero():
     constraint_set = MatrixAdapter.from_distance_matrix(matrix, ignore_zero=True)
     assert len(constraint_set.constraints) == 9
 
-    with pytest.raises(ValueError, match="Non-positive distance"):
+    with pytest.raises(ValueError, match="positive"):
         MatrixAdapter.from_distance_matrix(matrix, ignore_zero=False)
 
 
@@ -93,8 +94,8 @@ def test_matrix_adapter_from_distance_matrix_rejects_nan_when_ignore_disabled():
 
 
 @pytest.mark.unit
-def test_matrix_adapter_rejects_missing_required_sequential_with_ignore_nan():
-    """Missing required sequential edges should fail even when ignore_nan=True."""
+def test_solver_rejects_missing_sequential_after_nan_ingestion():
+    """Missing pairs can be represented but may prevent sequential placement."""
     matrix = np.array(
         [
             [0.0, 1.0, np.nan, 1.7],
@@ -104,13 +105,15 @@ def test_matrix_adapter_rejects_missing_required_sequential_with_ignore_nan():
         ]
     )
 
-    with pytest.raises(ValueError, match="Required sequential distance"):
-        MatrixAdapter.from_distance_matrix(matrix, ignore_nan=True)
+    constraints = MatrixAdapter.from_distance_matrix(matrix, ignore_nan=True)
+    assert constraints.get_constraint(0, 2) is None
+    with pytest.raises(ValueError, match="Missing required sequential"):
+        SBBUSolver(constraints)
 
 
 @pytest.mark.unit
-def test_matrix_adapter_rejects_required_sequential_zero_with_ignore_zero():
-    """Required sequential distances should not be dropped by ignore_zero=True."""
+def test_solver_rejects_missing_sequential_after_zero_ingestion():
+    """Explicitly skipped zeros do not supply a required sequential edge."""
     matrix = np.array(
         [
             [0.0, 1.0, 0.0, 1.7],
@@ -120,8 +123,10 @@ def test_matrix_adapter_rejects_required_sequential_zero_with_ignore_zero():
         ]
     )
 
-    with pytest.raises(ValueError, match="Required sequential distance"):
-        MatrixAdapter.from_distance_matrix(matrix, ignore_zero=True)
+    constraints = MatrixAdapter.from_distance_matrix(matrix, ignore_zero=True)
+    assert constraints.get_constraint(0, 2) is None
+    with pytest.raises(ValueError, match="Missing required sequential"):
+        SBBUSolver(constraints)
 
 
 @pytest.mark.unit
@@ -155,7 +160,7 @@ def test_matrix_adapter_from_distance_matrix_rejects_inf_when_ignore_disabled():
 @pytest.mark.unit
 def test_matrix_adapter_from_edge_list():
     """Test MatrixAdapter edge list conversion."""
-    edges = [(0, 1, 1.0), (1, 2, 1.5), (0, 2, 2.0)]
+    edges = [(0, 1, 1.0, 1.0), (1, 2, 1.5, 1.5), (0, 2, 2.0, 2.0)]
 
     constraint_set = MatrixAdapter.from_edge_list(3, edges)
 
@@ -167,9 +172,9 @@ def test_matrix_adapter_from_edge_list():
 @pytest.mark.parametrize(
     "edges",
     [
-        [(0.0, 1, 1.0), (0, 2, 1.5), (1, 2, 2.0)],
-        [(0, 1.0, 1.0), (0, 2, 1.5), (1, 2, 2.0)],
-        [(False, True, 1.0), (0, 2, 1.5), (1, 2, 2.0)],
+        [(0.0, 1, 1.0, 1.0), (0, 2, 1.5, 1.5), (1, 2, 2.0, 2.0)],
+        [(0, 1.0, 1.0, 1.0), (0, 2, 1.5, 1.5), (1, 2, 2.0, 2.0)],
+        [(False, True, 1.0, 1.0), (0, 2, 1.5, 1.5), (1, 2, 2.0, 2.0)],
     ],
 )
 def test_matrix_adapter_from_edge_list_rejects_non_integer_indices(edges):
@@ -380,8 +385,7 @@ def test_nmr_adapter_rejects_short_malformed_rows(tmp_path):
     """NMR ingestion should fail fast on malformed short rows."""
     nmr_path = tmp_path / "malformed.nmr"
     nmr_path.write_text(
-        "1 2 1.0 1.0 H H ALA\n"
-        "1 3 1.2 1.2 H H ALA GLY\n",
+        "1 2 1.0 1.0 H H ALA\n1 3 1.2 1.2 H H ALA GLY\n",
         encoding="utf-8",
     )
 
@@ -420,8 +424,8 @@ def test_nmr_adapter_rejects_non_contiguous_node_ids(tmp_path):
 
 
 @pytest.mark.integration
-def test_nmr_adapter_rejects_conflicting_sequential_duplicates(tmp_path):
-    """Sequential duplicate bounds with conflicts should fail fast."""
+def test_solver_rejects_nmr_sequential_alternatives(tmp_path):
+    """NMR ingestion preserves alternatives that SBBU cannot use as predecessors."""
     nmr_path = tmp_path / "dup_seq_conflict.nmr"
     nmr_path.write_text(
         "1 2 1.0 1.0 H H ALA GLY\n"
@@ -431,8 +435,9 @@ def test_nmr_adapter_rejects_conflicting_sequential_duplicates(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Conflicting sequential constraints"):
-        NMRAdapter.from_nmr_file(nmr_path)
+    constraints = NMRAdapter.from_nmr_file(nmr_path)
+    with pytest.raises(ValueError, match="Missing required sequential"):
+        SBBUSolver(constraints)
 
 
 @pytest.mark.integration
@@ -522,21 +527,21 @@ def test_nmr_adapter_verbose_output_does_not_write_stdout(tmp_path, capsys):
 def test_adapter_error_handling():
     """Test adapter error handling."""
     # MatrixAdapter errors
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         # Non-square matrix
         bad_matrix = np.array([[1, 2, 3]])
         MatrixAdapter.from_distance_matrix(bad_matrix)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         # Mismatched adjacency and distance matrices
         adj = np.array([[0, 1], [1, 0]])
         dist = np.array([[0, 1, 2], [1, 0, 1], [2, 1, 0]])
         MatrixAdapter.from_adjacency_matrix(adj, dist)
 
     # Edge list errors
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         # Negative distance
-        bad_edges = [(0, 1, -1.0)]
+        bad_edges = [(0, 1, -1.0, -1.0)]
         MatrixAdapter.from_edge_list(2, bad_edges)
 
 
@@ -544,11 +549,11 @@ def test_adapter_error_handling():
 def test_constraint_set_edge_methods():
     """Test ConstraintSet edge classification methods."""
     constraints = [
-        DistanceConstraint(0, 1, 1.0),  # Sequential
-        DistanceConstraint(1, 2, 1.0),  # Sequential
-        DistanceConstraint(2, 3, 1.0),  # Sequential
-        DistanceConstraint(0, 4, 2.0),  # Long-range (4-0=4 > 3)
-        DistanceConstraint(1, 5, 2.1),  # Long-range (5-1=4 > 3)
+        DistanceConstraint(0, 1, 1.0, 1.0),  # Sequential
+        DistanceConstraint(1, 2, 1.0, 1.0),  # Sequential
+        DistanceConstraint(2, 3, 1.0, 1.0),  # Sequential
+        DistanceConstraint(0, 4, 2.0, 2.0),  # Long-range (4-0=4 > 3)
+        DistanceConstraint(1, 5, 2.1, 2.1),  # Long-range (5-1=4 > 3)
     ]
 
     constraint_set = ConstraintSet(6, constraints)

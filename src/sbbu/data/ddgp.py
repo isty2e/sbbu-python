@@ -23,7 +23,7 @@ class DDGProblem:
         Absolute tolerance used for distance constraint checks.
     """
 
-    def __init__(self, file_path: str | Path, distance_tolerance: float = 1e-3):
+    def __init__(self, file_path: str | Path, distance_tolerance: float = 1e-3) -> None:
         """Initialize a DDGP instance from an NMR constraint file.
 
         Parameters
@@ -55,15 +55,15 @@ class DDGProblem:
         # Extract exact distances for consecutive atoms
         for i in range(self.num_nodes):
             if i > 0:
-                lower, upper = self._get_exact_bound(i, i - 1)
+                lower, _upper = self._get_exact_bound(i, i - 1)
                 self.a_squared[i] = lower * lower
 
             if i > 1:
-                lower, upper = self._get_exact_bound(i, i - 2)
+                lower, _upper = self._get_exact_bound(i, i - 2)
                 self.b_squared[i] = lower * lower
 
             if i > 2:
-                lower, upper = self._get_exact_bound(i, i - 3)
+                lower, _upper = self._get_exact_bound(i, i - 3)
                 self.c_squared[i] = lower * lower
 
     def _get_exact_bound(self, i: int, j: int) -> tuple[float, float]:

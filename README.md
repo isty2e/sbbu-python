@@ -6,7 +6,7 @@ This project is a Python port of the original C++ implementation:
 
 ## Features
 
-- **Multiple Input Formats**: NMR files, distance matrices, edge lists
+- **Multiple Input Formats**: NMR files, distance matrices, bounds matrices, edge lists
 - **High Performance**: Optimized core algorithm aligned with the original C++ reference
 - **Extensive Testing**: Comprehensive test suite with pytest
 
@@ -26,8 +26,8 @@ distance_matrix = np.array([...])  # Your NxN distance matrix
 coords, stats = sbbu.solve_from_distance_matrix(distance_matrix)
 
 # From edge lists (graph-like data)
-edges = [(0, 1, 1.2), (1, 2, 1.1), (2, 3, 1.3), ...]  # (i, j, distance)
-coords, stats = sbbu.solve_from_edge_list(num_nodes, edges)
+edges = [(0, 1, 1.2, 1.2), (1, 2, 1.1, 1.1), (0, 2, 1.8, 1.8)]
+coords, stats = sbbu.solve_from_edge_list(3, edges)
 ```
 
 ### Advanced Usage
@@ -68,7 +68,8 @@ hard constraint** at the requested tolerance. Node IDs and the first-three-node
 coordinate convention are preserved. This is an extension of the reference SBBU
 implementation, not a global MDS fit or a continuous-optimization fallback.
 
-Sparse, interval, or soft-ambiguous inputs retain the reflection search. The same
+Supported sparse inputs, long-range intervals and soft alternatives retain the
+reflection search. Exact sequential predecessor distances are still required. The same
 search is used if the initializer cannot produce an acceptable candidate. Local
 reflection enumeration selects the lowest-error candidate within `max_iterations`,
 rather than stopping at the first approximate tolerance pass for one edge. For
@@ -84,8 +85,8 @@ initialization, search, refinement, and final validation.
 - Input scalar values are retained in double-precision computation; converting
   float32 input cannot recover precision already lost in the supplied distances.
 - Solving every noisy or degenerate instance is **not guaranteed**. In particular,
-  uncertain sequential interval distances are unsupported by the existing
-  exact-sequential constraint model.
+  uncertain sequential interval distances can be represented but are unsupported
+  by the current solver (see [Constraint contract](#constraint-contract)).
 - Failure to find a realization is not a global mathematical infeasibility
   certificate. Search budgets and numerical conditioning can cause failure.
 - Exact coordinate permutation equivariance is not promised: coordinate frames,
@@ -93,6 +94,36 @@ initialization, search, refinement, and final validation.
   always use the original node indices and must pass the original constraints.
 
 ## Input Formats
+
+### Constraint contract
+
+Every `DistanceConstraint(i, j, lower_bound, upper_bound)` represents a finite,
+positive closed interval. Both bounds are required. Equal endpoints denote an
+exact distance; a positive-width interval is never rounded to exact based on a
+tolerance. Exact distance inputs are normalized to `[d, d]`.
+
+Adapters validate input format and construct a `ConstraintSet`; they do not assert
+that SBBU can solve it. `SBBUSolver` requires an unambiguous exact distance for
+every pair with `1 <= j - i <= 3`. It rejects missing or interval predecessors,
+even if an interval is narrower than `distance_tolerance`. Other hard distances
+may be intervals. These checks establish applicability, not global feasibility.
+
+Duplicate observations for a pair are intersected. An empty intersection retains
+the observations as soft alternatives, rather than inventing a distance. Such
+alternatives cannot supply a required exact predecessor.
+
+**Unsupported:** one-sided bounds and interval-predecessor reconstruction are
+outside this API redesign. They are deferred until algorithm support is pursued;
+`None` and infinity do not represent open bounds. Missing observations can instead
+be omitted from an edge list or represented by paired NaNs in bounds matrices.
+
+**Breaking API change:** replace `DistanceConstraint(i, j, d)` with
+`DistanceConstraint(i, j, d, d)`, and three-field edges with `(i, j, d, d)`.
+Use `MatrixAdapter` instead of the removed `ConstraintSet.from_*` constructors.
+Use explicit bounds or `is_exact` instead of the former `distance` projection;
+scalar violations are available as `constraint.violation(measured_distance)`.
+`NMRAdapter.from_nmr_file` accepts only the path; configure acceptance tolerance
+on the solver or `solve_from_nmr`, not on input conversion.
 
 ### 1. NMR Files
 Standard NMR restraint files for protein structure determination:
@@ -114,18 +145,40 @@ coords, stats = sbbu.solve_from_distance_matrix(matrix)
 
 # Sparse matrix
 sparse_matrix = np.array([[0, 1.2, np.nan], [1.2, 0, 1.1], [np.nan, 1.1, 0]])
-coords, stats = sbbu.solve_from_distance_matrix(sparse_matrix, ignore_nan=True)
+from sbbu.adapters import MatrixAdapter
+
+constraints = MatrixAdapter.from_distance_matrix(sparse_matrix, ignore_nan=True)
+# This graph can be stored, but SBBU cannot solve it: distance (0, 2) is missing.
 ```
 
-### 3. Edge Lists
+### 3. Bounds Matrices
+
+```python
+import numpy as np
+from sbbu.adapters import MatrixAdapter
+
+lower_bounds = np.array([[0, 1.0, 1.0], [1.0, 0, 1.0], [1.0, 1.0, 0]])
+upper_bounds = np.array([[0, 2.0, 2.0], [2.0, 0, 2.0], [2.0, 2.0, 0]])
+constraints = MatrixAdapter.from_bounds_matrices(lower_bounds, upper_bounds)
+# Construction succeeds. SBBU rejects these interval predecessors.
+```
+
+Bounds matrices must have matching square shapes, exact symmetry, zero diagonals,
+and positive finite off-diagonal bounds with `lower_bounds <= upper_bounds`.
+Matching NaNs in both bounds and both directions omit a pair by default; set
+`ignore_nan=False` to reject them. Partially missing pairs and infinities are invalid.
+For solver-compatible inputs, use
+`sbbu.solve_from_bounds_matrices(lower_bounds, upper_bounds)`.
+
+### 4. Edge Lists
 Graph-like representations:
 ```python
 import sbbu
 
 edges = [
-    (0, 1, 1.2),  # distance between nodes 0 and 1
-    (1, 2, 1.1),  # distance between nodes 1 and 2
-    (0, 2, 1.8),  # distance between nodes 0 and 2
+    (0, 1, 1.2, 1.2),  # exact distance
+    (1, 2, 1.1, 1.1),
+    (0, 2, 1.8, 1.8),
 ]
 coords, stats = sbbu.solve_from_edge_list(num_nodes=3, edges=edges)
 ```

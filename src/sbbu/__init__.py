@@ -14,8 +14,8 @@ Usage:
     coords, stats = solve_from_distance_matrix(distance_matrix)
 
     # For graph-like data
-    edges = [(0,1,1.2), (1,2,1.1), (2,3,1.3), ...]
-    coords, stats = solve_from_edge_list(num_nodes, edges)
+    edges = [(0, 1, 1.2, 1.2), (1, 2, 1.1, 1.1), (0, 2, 1.3, 1.3)]
+    coords, stats = solve_from_edge_list(3, edges)
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -23,6 +23,7 @@ from importlib.metadata import PackageNotFoundError, version
 # High-level API (recommended for most users)
 from .api import (
     create_test_constraints,
+    solve_from_bounds_matrices,
     solve_from_distance_matrix,
     solve_from_edge_list,
     solve_from_nmr,
@@ -38,6 +39,7 @@ __all__ = [
     "SBBUConfig",
     "SBBUSolver",
     "create_test_constraints",
+    "solve_from_bounds_matrices",
     "solve_from_distance_matrix",
     "solve_from_edge_list",
     "solve_from_nmr",

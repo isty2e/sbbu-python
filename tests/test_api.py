@@ -46,7 +46,7 @@ def test_solve_from_edge_list(edge_list_simple):
     assert stats.mean_distance_error < 1e-6
 
     # Check edge distance reconstruction
-    for i, j, expected_dist in edges:
+    for i, j, expected_dist, _upper in edges:
         actual_dist = np.linalg.norm(coords[i] - coords[j])
         assert abs(expected_dist - actual_dist) < 1e-6
 
@@ -164,17 +164,17 @@ def test_create_test_constraints_rejects_non_positive_num_nodes():
 def test_api_error_handling():
     """Test API error handling."""
     # Empty distance matrix
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         sbbu.solve_from_distance_matrix(np.array([[]]))
 
     # Negative distances
     bad_matrix = np.array([[0, -1], [-1, 0]])
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         sbbu.solve_from_distance_matrix(bad_matrix)
 
     # Edge list with negative distances
-    bad_edges = [(0, 1, -1.0)]
-    with pytest.raises(Exception):
+    bad_edges = [(0, 1, -1.0, -1.0)]
+    with pytest.raises(ValueError):
         sbbu.solve_from_edge_list(2, bad_edges)
 
 
@@ -218,7 +218,7 @@ def test_solve_from_distance_matrix_rejects_zero_off_diagonal_early():
         ]
     )
 
-    with pytest.raises(ValueError, match="Non-positive distance"):
+    with pytest.raises(ValueError, match="positive"):
         sbbu.solve_from_distance_matrix(matrix, verbose=False)
 
 
@@ -260,3 +260,35 @@ def test_solve_from_distance_matrix_allows_zero_on_nonrequired_edge_with_overrid
 
     assert coords.shape == (5, 3)
     assert stats.solve_time > 0
+
+
+@pytest.mark.parametrize("num_nodes", [1.5, True, "6", None])
+def test_create_test_constraints_rejects_node_count_type(
+    num_nodes: float | str | None,
+) -> None:
+    with pytest.raises(TypeError, match="num_nodes"):
+        sbbu.create_test_constraints(num_nodes=num_nodes)
+
+
+@pytest.mark.parametrize("connectivity", [True, "0.5", None])
+def test_create_test_constraints_rejects_connectivity_type(
+    connectivity: bool | str | None,
+) -> None:
+    with pytest.raises(TypeError, match="connectivity"):
+        sbbu.create_test_constraints(connectivity=connectivity)
+
+
+@pytest.mark.parametrize("noise_level", [True, "0.1", None])
+def test_create_test_constraints_rejects_noise_type(
+    noise_level: bool | str | None,
+) -> None:
+    with pytest.raises(TypeError, match="noise_level"):
+        sbbu.create_test_constraints(noise_level=noise_level)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_create_test_constraints_rejects_nonfinite_numeric_values(value: float) -> None:
+    with pytest.raises(ValueError, match="connectivity"):
+        sbbu.create_test_constraints(connectivity=value)
+    with pytest.raises(ValueError, match="noise_level"):
+        sbbu.create_test_constraints(noise_level=value)

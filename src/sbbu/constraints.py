@@ -4,15 +4,9 @@ Distance constraint representations for SBBU algorithm.
 
 import math
 from dataclasses import dataclass, field
-from typing import ClassVar
 
 import numpy as np
 from numpy.typing import NDArray
-
-try:
-    from typing import Self
-except ImportError:  # pragma: no cover - Python < 3.11
-    from typing_extensions import Self
 
 
 @dataclass(frozen=True)
@@ -28,15 +22,15 @@ class DistanceConstraint:
         Index of the second node.
     lower_bound : float
         Strictly positive lower bound of the distance.
-    upper_bound : float | None, default=None
-        Optional upper bound. ``None`` denotes an exact distance equal to
-        ``lower_bound``.
+    upper_bound : float
+        Finite upper bound, at least ``lower_bound``. Equal endpoints denote
+        an exact distance; positive-width intervals are never rounded to exact.
     """
 
     i: int  # First node index
     j: int  # Second node index
     lower_bound: float  # Minimum distance
-    upper_bound: float | None = None  # Maximum distance (None = no upper bound)
+    upper_bound: float  # Maximum distance
 
     def __post_init__(self) -> None:
         if (
@@ -54,41 +48,59 @@ class DistanceConstraint:
             raise ValueError(f"lower_bound must be finite, got {self.lower_bound}")
         if self.lower_bound <= 0:
             raise ValueError(f"lower_bound must be positive, got {self.lower_bound}")
-        if self.upper_bound is not None and not math.isfinite(self.upper_bound):
+        if not math.isfinite(self.upper_bound):
             raise ValueError(f"upper_bound must be finite, got {self.upper_bound}")
-        if self.upper_bound is not None and self.upper_bound <= self.lower_bound:
+        if self.upper_bound < self.lower_bound:
             raise ValueError(
-                f"upper_bound ({self.upper_bound}) must be greater than lower_bound ({self.lower_bound})"
+                f"upper_bound ({self.upper_bound}) must be at least lower_bound ({self.lower_bound})"
             )
 
         object.__setattr__(self, "lower_bound", float(self.lower_bound))
-        if self.upper_bound is not None:
-            object.__setattr__(self, "upper_bound", float(self.upper_bound))
+        object.__setattr__(self, "upper_bound", float(self.upper_bound))
 
     @property
-    def distance(self) -> float:
+    def is_exact(self) -> bool:
+        """Return whether the interval has equal endpoints.
+
+        Returns
+        -------
+        bool
+            True only for a point interval, independently of solver tolerance.
         """
-        Return the primary distance value used by SBBU.
+        return self.lower_bound == self.upper_bound
+
+    def violation(self, distance: float) -> float:
+        """Return the absolute distance outside this interval.
+
+        Parameters
+        ----------
+        distance : float
+            Measured distance between the endpoints.
 
         Returns
         -------
         float
-            The lower bound of this constraint.
+            Zero inside the interval, otherwise distance to its nearest bound.
+            Nonfinite measurements have infinite violation.
         """
-        return self.lower_bound
+        if not math.isfinite(distance):
+            return math.inf
+        return max(self.lower_bound - distance, distance - self.upper_bound, 0.0)
 
 
 @dataclass
 class ConstraintSet:
     """
-    Store and normalize distance constraints for SBBU solving.
+    Store distance constraints independently of solver applicability.
 
     Parameters
     ----------
     num_nodes : int
         Number of nodes in the problem.
     constraints : list[DistanceConstraint]
-        Input constraints to normalize into hard and soft-ambiguous groups.
+        Observations grouped by node pair. Intersecting duplicates become one
+        hard interval; disjoint duplicates remain soft alternatives. Construction
+        checks neither discretization requirements nor global feasibility.
     """
 
     num_nodes: int
@@ -101,11 +113,9 @@ class ConstraintSet:
         field(init=False, repr=False)
     )
 
-    _SEQUENTIAL_EXACT_TOLERANCE: ClassVar[float] = 1e-10
-    _INTERSECTION_TOLERANCE: ClassVar[float] = 1e-12
-
-    def __post_init__(self):
-        # Validate constraints
+    def __post_init__(self) -> None:
+        if isinstance(self.num_nodes, bool) or not isinstance(self.num_nodes, int):
+            raise TypeError("num_nodes must be an integer")
         if self.num_nodes <= 0:
             raise ValueError(f"num_nodes must be positive, got {self.num_nodes}")
 
@@ -132,100 +142,19 @@ class ConstraintSet:
                 f"Constraint references node {max_node} but num_nodes is {self.num_nodes}"
             )
 
-        for (i, j), pair_constraints in sorted(constraints_by_pair.items()):
-            if len(pair_constraints) == 1 and pair_constraints[0].upper_bound is None:
+        for pair, pair_constraints in sorted(constraints_by_pair.items()):
+            if len(pair_constraints) == 1:
                 constraint = pair_constraints[0]
-                self._hard_constraints.append(constraint)
-                self._constraint_lookup[(i, j)] = constraint
-                continue
-
-            if j - i <= 3:
-                sequential_constraint = self._build_sequential_constraint(
-                    i, j, pair_constraints
-                )
-                self._hard_constraints.append(sequential_constraint)
-                self._constraint_lookup[(i, j)] = sequential_constraint
-                continue
-
-            long_range_constraint = self._build_long_range_constraint(pair_constraints)
-            if long_range_constraint is not None:
-                self._hard_constraints.append(long_range_constraint)
-                self._constraint_lookup[(i, j)] = long_range_constraint
             else:
-                self._soft_ambiguous_constraints[(i, j)] = pair_constraints
+                lower = max(c.lower_bound for c in pair_constraints)
+                upper = min(c.upper_bound for c in pair_constraints)
+                if lower > upper:
+                    self._soft_ambiguous_constraints[pair] = pair_constraints
+                    continue
+                constraint = DistanceConstraint(*pair, lower, upper)
 
-    @classmethod
-    def _normalized_upper_bound(cls, constraint: DistanceConstraint) -> float:
-        """Return the upper bound, interpreting None as exact lower bound."""
-        if constraint.upper_bound is None:
-            return constraint.lower_bound
-        return constraint.upper_bound
-
-    @classmethod
-    def _build_sequential_constraint(
-        cls, i: int, j: int, pair_constraints: list[DistanceConstraint]
-    ) -> DistanceConstraint:
-        """
-        Build the unique sequential constraint.
-
-        Sequential constraints are required by trilateration and must be exact and
-        mutually consistent across duplicate entries.
-        """
-        reference = pair_constraints[0]
-        reference_upper = cls._normalized_upper_bound(reference)
-        if (
-            abs(reference_upper - reference.lower_bound)
-            > cls._SEQUENTIAL_EXACT_TOLERANCE
-        ):
-            raise ValueError(
-                f"Sequential constraint ({i}, {j}) must be exact, got "
-                f"[{reference.lower_bound}, {reference_upper}]"
-            )
-
-        exact_distance = reference.lower_bound
-        for constraint in pair_constraints[1:]:
-            upper = cls._normalized_upper_bound(constraint)
-            if abs(upper - constraint.lower_bound) > cls._SEQUENTIAL_EXACT_TOLERANCE:
-                raise ValueError(
-                    f"Sequential constraint ({i}, {j}) must be exact, got "
-                    f"[{constraint.lower_bound}, {upper}]"
-                )
-            if (
-                abs(constraint.lower_bound - exact_distance)
-                > cls._SEQUENTIAL_EXACT_TOLERANCE
-            ):
-                raise ValueError(
-                    f"Conflicting sequential constraints for ({i}, {j}): "
-                    f"{exact_distance} vs {constraint.lower_bound}"
-                )
-
-        return DistanceConstraint(i, j, exact_distance)
-
-    @classmethod
-    def _build_long_range_constraint(
-        cls, pair_constraints: list[DistanceConstraint]
-    ) -> DistanceConstraint | None:
-        """
-        Build a merged long-range hard constraint.
-
-        If duplicates have empty intersection, the pair is treated as soft-ambiguous
-        and no hard constraint is returned.
-        """
-        i = pair_constraints[0].i
-        j = pair_constraints[0].j
-
-        merged_lower = max(constraint.lower_bound for constraint in pair_constraints)
-        merged_upper = min(
-            cls._normalized_upper_bound(constraint) for constraint in pair_constraints
-        )
-
-        if merged_lower > merged_upper + cls._INTERSECTION_TOLERANCE:
-            return None
-
-        if abs(merged_upper - merged_lower) <= cls._INTERSECTION_TOLERANCE:
-            return DistanceConstraint(i, j, merged_lower)
-
-        return DistanceConstraint(i, j, merged_lower, upper_bound=merged_upper)
+            self._hard_constraints.append(constraint)
+            self._constraint_lookup[pair] = constraint
 
     def get_hard_constraints(self) -> list[DistanceConstraint]:
         """
@@ -252,7 +181,7 @@ class ConstraintSet:
             self.num_nodes * (self.num_nodes - 1) // 2
         ):
             return None
-        if any(c.upper_bound is not None for c in self._hard_constraints):
+        if any(not c.is_exact for c in self._hard_constraints):
             return None
 
         distances = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float64)
@@ -297,7 +226,7 @@ class ConstraintSet:
         self,
     ) -> list[tuple[tuple[int, int], list[DistanceConstraint]]]:
         """
-        Return soft-ambiguous long-range constraint groups.
+        Return soft-ambiguous constraint groups.
 
         Returns
         -------
@@ -348,121 +277,3 @@ class ConstraintSet:
             ``True`` if a hard constraint exists for the pair, else ``False``.
         """
         return self.get_constraint(i, j) is not None
-
-    @classmethod
-    def from_edge_list(
-        cls, num_nodes: int, edges: list[tuple[int, int, float]]
-    ) -> Self:
-        """
-        Build a constraint set from edge tuples.
-
-        Parameters
-        ----------
-        num_nodes : int
-            Number of nodes in the problem.
-        edges : list[tuple[int, int, float]]
-            Edge list in ``(i, j, distance)`` format.
-
-        Returns
-        -------
-        ConstraintSet
-            New constraint set built from the provided edges.
-
-        Raises
-        ------
-        ValueError
-            If node indices or distances are invalid.
-        """
-        constraints = []
-        for i, j, dist in edges:
-            if i > j:
-                i, j = j, i  # Ensure i < j
-            constraints.append(DistanceConstraint(i, j, dist))
-        return cls(num_nodes, constraints)
-
-    @classmethod
-    def from_distance_matrix(
-        cls,
-        distance_matrix: NDArray[np.float64],
-        ignore_nan: bool = True,
-        ignore_inf: bool = True,
-        ignore_zero: bool = True,
-    ) -> Self:
-        """
-        Build a constraint set from a square distance matrix.
-
-        Parameters
-        ----------
-        distance_matrix : NDArray[np.float64]
-            Pairwise distance matrix of shape ``(N, N)``.
-        ignore_nan : bool, default=True
-            Whether to skip ``NaN`` entries.
-        ignore_inf : bool, default=True
-            Whether to skip infinite entries.
-        ignore_zero : bool, default=True
-            Whether to skip non-positive distance values.
-
-        Returns
-        -------
-        ConstraintSet
-            New constraint set built from valid matrix entries.
-
-        Raises
-        ------
-        ValueError
-            If ``distance_matrix`` is not two-dimensional and square.
-        """
-        if distance_matrix.ndim != 2:
-            raise ValueError(f"Expected 2D matrix, got {distance_matrix.ndim}D")
-        if distance_matrix.shape[0] != distance_matrix.shape[1]:
-            raise ValueError(
-                f"Expected square matrix, got shape {distance_matrix.shape}"
-            )
-
-        num_nodes = distance_matrix.shape[0]
-        constraints = []
-
-        for i in range(num_nodes):
-            for j in range(i + 1, num_nodes):  # Only upper triangle
-                dist = distance_matrix[i, j]
-                is_required_sequential = j - i <= 3
-
-                if np.isnan(dist):
-                    if ignore_nan:
-                        if is_required_sequential:
-                            raise ValueError(
-                                "Required sequential distance "
-                                f"({i}, {j}) is missing (NaN)"
-                            )
-                        continue
-                    raise ValueError(
-                        f"Distance at ({i}, {j}) must be finite, got {dist}"
-                    )
-
-                if np.isinf(dist):
-                    if ignore_inf:
-                        if is_required_sequential:
-                            raise ValueError(
-                                "Required sequential distance "
-                                f"({i}, {j}) is missing (infinite)"
-                            )
-                        continue
-                    raise ValueError(
-                        f"Distance at ({i}, {j}) must be finite, got {dist}"
-                    )
-
-                if dist <= 0:
-                    if ignore_zero:
-                        if is_required_sequential:
-                            raise ValueError(
-                                "Required sequential distance "
-                                f"({i}, {j}) must be positive, got {dist}"
-                            )
-                        continue
-                    raise ValueError(
-                        f"Non-positive distance at ({i}, {j}) with ignore_zero=False: {dist}"
-                    )
-
-                constraints.append(DistanceConstraint(i, j, dist))
-
-        return cls(num_nodes, constraints)
