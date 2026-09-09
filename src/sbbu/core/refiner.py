@@ -11,8 +11,8 @@ from ..constraints import DistanceConstraint
 from .types import (
     ProblemState,
     RefinementContext,
-    SBBUStats,
     SBBUSolveInfeasibleError,
+    SBBUStats,
     SBBUTimeoutError,
 )
 
@@ -109,7 +109,11 @@ class SoftPruningRefiner:
         context: RefinementContext,
         unresolved: list[_AmbiguousGroup],
     ) -> tuple[
-        list[_AmbiguousGroup], list[DistanceConstraint], list[_AmbiguousGroup], int, bool
+        list[_AmbiguousGroup],
+        list[DistanceConstraint],
+        list[_AmbiguousGroup],
+        int,
+        bool,
     ]:
         """Process one refinement round over all unresolved ambiguous groups."""
         next_unresolved: list[_AmbiguousGroup] = []
@@ -160,7 +164,7 @@ class SoftPruningRefiner:
         scored = [
             (
                 constraint,
-                context.constraint_violation(constraint, actual_distance),
+                constraint.violation(actual_distance),
             )
             for constraint in candidates
         ]

@@ -90,23 +90,7 @@ class SBBUSolver:
                 if i < 0:
                     continue
 
-                constraint = self.constraints.get_constraint(i, j)
-                if constraint is None:
-                    raise ValueError(
-                        f"Missing required sequential constraint ({i}, {j}) "
-                        "for DDGP trilateration"
-                    )
-
-                upper = (
-                    constraint.upper_bound
-                    if constraint.upper_bound is not None
-                    else constraint.lower_bound
-                )
-                if abs(upper - constraint.lower_bound) > self.config.distance_tolerance:
-                    raise ValueError(
-                        f"Sequential constraint ({i}, {j}) must be exact; "
-                        f"got bounds [{constraint.lower_bound}, {upper}]"
-                    )
+                self._get_exact_distance(i, j)
 
     def _state_required(self) -> ProblemState:
         """Return active runtime state during solve-time internal execution."""
@@ -212,26 +196,18 @@ class SBBUSolver:
         )
 
     def _get_exact_distance(self, i: int, j: int) -> float:
-        """
-        Get an exact distance value for sequential trilateration constraints.
-
-        SBBU's forward placement requires exact distances for (i, i-1), (i, i-2),
-        and (i, i-3). Interval bounds are accepted only for long-range constraints.
-        """
+        """Require an unambiguous point interval for sequential placement."""
         constraint = self.constraints.get_constraint(i, j)
-        if not constraint:
-            raise ValueError(f"No constraint found between nodes {i} and {j}")
-
-        upper = constraint.upper_bound
-        if (
-            upper is not None
-            and abs(upper - constraint.lower_bound) > self.config.distance_tolerance
-        ):
+        if constraint is None:
+            raise ValueError(
+                f"Missing required sequential constraint ({i}, {j}); "
+                "an unambiguous exact distance is required"
+            )
+        if not constraint.is_exact:
             raise ValueError(
                 f"Sequential constraint ({i}, {j}) must be exact; "
-                f"got bounds [{constraint.lower_bound}, {upper}]"
+                f"got bounds [{constraint.lower_bound}, {constraint.upper_bound}]"
             )
-
         return constraint.lower_bound
 
     def _process_long_range_constraints(self, state: ProblemState) -> None:
@@ -471,9 +447,7 @@ class SBBUSolver:
             pos_i = state.coordinates[constraint.i]
             pos_j = state.coordinates[constraint.j]
             current_distance = float(np.linalg.norm(pos_i - pos_j))
-            error = self._metrics_calculator.constraint_violation(
-                constraint, current_distance
-            )
+            error = constraint.violation(current_distance)
 
             # A local tolerance pass is insufficient. Try whole-problem completion
             # for full coordinates or potentially expensive search spaces.
@@ -524,7 +498,7 @@ class SBBUSolver:
             )
 
         # Check final constraint satisfaction
-        lower, upper = self._metrics_calculator.constraint_bounds(constraint)
+        lower, upper = constraint.lower_bound, constraint.upper_bound
         if min_error > self.config.distance_tolerance:
             raise SBBUSolveInfeasibleError(
                 f"Constraint ({constraint.i + 1}, {constraint.j + 1}, bounds=[{lower}, {upper}]) could not be solved "
@@ -692,7 +666,6 @@ class SBBUSolver:
             config=self.config,
             num_nodes=self.constraints.num_nodes,
             hard_constraints=self.constraints.get_hard_constraints(),
-            constraint_violation=self._metrics_calculator.constraint_violation,
             check_time_limit=self._check_time_limit,
             run_refinement_solve=self._run_refinement_solve,
         )
@@ -726,7 +699,7 @@ class SBBUSolver:
                     state.coordinates[constraint.i] - state.coordinates[constraint.j]
                 )
             )
-            lower, upper = self._metrics_calculator.constraint_bounds(constraint)
+            lower, upper = constraint.lower_bound, constraint.upper_bound
             raise SBBUSolveInfeasibleError(
                 f"Constraint ({constraint.i}, {constraint.j}) not satisfied: "
                 f"expected in [{lower:.6f}, {upper:.6f}], got {actual_distance:.6f} "

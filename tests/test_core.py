@@ -7,14 +7,13 @@ import pytest
 
 from sbbu.constraints import ConstraintSet, DistanceConstraint
 from sbbu.core.cluster import ReflectionCluster, UnionFind
-from sbbu.core.metrics import MetricsCalculator
 from sbbu.core.refiner import SoftPruningRefiner
 from sbbu.core.solver import SBBUConfig, SBBUSolver
 from sbbu.core.types import (
     ProblemState,
     RefinementContext,
-    SBBUStats,
     SBBUSolveInfeasibleError,
+    SBBUStats,
     SBBUTimeoutError,
 )
 
@@ -22,13 +21,13 @@ from sbbu.core.types import (
 @pytest.mark.unit
 def test_constraint_creation():
     """Test creating distance constraints."""
-    constraint = DistanceConstraint(0, 1, 1.5)
+    constraint = DistanceConstraint(0, 1, 1.5, 1.5)
 
     assert constraint.i == 0
     assert constraint.j == 1
     assert constraint.lower_bound == 1.5
-    assert constraint.upper_bound is None
-    assert constraint.distance == 1.5
+    assert constraint.upper_bound == 1.5
+    assert constraint.is_exact
 
 
 @pytest.mark.unit
@@ -36,11 +35,11 @@ def test_constraint_validation():
     """Test constraint validation."""
     # Invalid order (i >= j)
     with pytest.raises(ValueError):
-        DistanceConstraint(1, 0, 1.5)
+        DistanceConstraint(1, 0, 1.5, 1.5)
 
     # Negative distance
     with pytest.raises(ValueError):
-        DistanceConstraint(0, 1, -1.0)
+        DistanceConstraint(0, 1, -1.0, -1.0)
 
     # Invalid upper bound
     with pytest.raises(ValueError):
@@ -48,17 +47,17 @@ def test_constraint_validation():
 
     # Negative node index should be rejected at set level
     with pytest.raises(ValueError):
-        ConstraintSet(2, [DistanceConstraint(-1, 1, 1.0)])
+        ConstraintSet(2, [DistanceConstraint(-1, 1, 1.0, 1.0)])
 
 
 @pytest.mark.unit
 def test_constraint_validation_rejects_non_finite_bounds():
     """Distance constraints should reject NaN/inf bounds."""
     with pytest.raises(ValueError, match="finite"):
-        DistanceConstraint(0, 1, np.nan)
+        DistanceConstraint(0, 1, np.nan, np.nan)
 
     with pytest.raises(ValueError, match="finite"):
-        DistanceConstraint(0, 1, np.inf)
+        DistanceConstraint(0, 1, np.inf, np.inf)
 
     with pytest.raises(ValueError, match="finite"):
         DistanceConstraint(0, 1, 1.0, upper_bound=np.nan)
@@ -73,7 +72,7 @@ def test_constraint_validation_rejects_non_integer_indices(indices):
     """Distance constraints should reject non-integer/bool node indices."""
     i, j = indices
     with pytest.raises(TypeError, match="integers"):
-        DistanceConstraint(i, j, 1.0)  # type: ignore[arg-type]
+        DistanceConstraint(i, j, 1.0, 1.0)  # type: ignore[arg-type]
 
 
 @pytest.mark.unit
@@ -118,10 +117,10 @@ def test_constraint_set_edge_classification(simple_chain):
 def test_long_range_constraint_ordering():
     """Long-range constraints should be sorted by target node then separation."""
     constraints = [
-        DistanceConstraint(0, 7, 2.0),
-        DistanceConstraint(1, 5, 2.0),
-        DistanceConstraint(0, 6, 2.0),
-        DistanceConstraint(2, 6, 2.0),
+        DistanceConstraint(0, 7, 2.0, 2.0),
+        DistanceConstraint(1, 5, 2.0, 2.0),
+        DistanceConstraint(0, 6, 2.0, 2.0),
+        DistanceConstraint(2, 6, 2.0, 2.0),
     ]
     constraint_set = ConstraintSet(8, constraints)
 
@@ -147,7 +146,7 @@ def _five_node_reference_constraints() -> tuple[np.ndarray, list[DistanceConstra
     for i in range(5):
         for j in range(i + 1, min(i + 4, 5)):
             distance = float(np.linalg.norm(true_coords[i] - true_coords[j]))
-            constraints.append(DistanceConstraint(i, j, distance))
+            constraints.append(DistanceConstraint(i, j, distance, distance))
     return true_coords, constraints
 
 
@@ -168,11 +167,10 @@ def _six_node_reference_constraints() -> tuple[np.ndarray, list[DistanceConstrai
     for i in range(6):
         for j in range(i + 1, min(i + 4, 6)):
             distance = float(np.linalg.norm(true_coords[i] - true_coords[j]))
-            constraints.append(DistanceConstraint(i, j, distance))
+            constraints.append(DistanceConstraint(i, j, distance, distance))
 
-    constraints.append(
-        DistanceConstraint(0, 5, float(np.linalg.norm(true_coords[0] - true_coords[5])))
-    )
+    distance = float(np.linalg.norm(true_coords[0] - true_coords[5]))
+    constraints.append(DistanceConstraint(0, 5, distance, distance))
     return true_coords, constraints
 
 
@@ -192,7 +190,6 @@ def test_overlapping_long_range_duplicates_are_intersected():
 
     assert merged is not None
     assert abs(merged.lower_bound - 2.5) < 1e-12
-    assert merged.upper_bound is not None
     assert abs(merged.upper_bound - 3.0) < 1e-12
     assert len(constraint_set.get_soft_ambiguous_constraints()) == 0
 
@@ -221,17 +218,19 @@ def test_conflicting_long_range_duplicates_become_soft_ambiguous():
 
 
 @pytest.mark.unit
-def test_conflicting_sequential_duplicates_raise_error():
-    """Sequential duplicate conflicts must fail fast due to trilateration requirements."""
+def test_solver_rejects_ambiguous_sequential_duplicates():
+    """The graph retains alternatives; sequential placement requires one hard value."""
     constraints = [
-        DistanceConstraint(0, 1, 1.0),
-        DistanceConstraint(0, 1, 1.1),
-        DistanceConstraint(0, 2, 1.4),
-        DistanceConstraint(1, 2, 1.0),
+        DistanceConstraint(0, 1, 1.0, 1.0),
+        DistanceConstraint(0, 1, 1.1, 1.1),
+        DistanceConstraint(0, 2, 1.4, 1.4),
+        DistanceConstraint(1, 2, 1.0, 1.0),
     ]
 
-    with pytest.raises(ValueError, match="Conflicting sequential constraints"):
-        ConstraintSet(3, constraints)
+    constraint_set = ConstraintSet(3, constraints)
+    assert len(constraint_set.get_soft_ambiguous_constraints()) == 1
+    with pytest.raises(ValueError, match="Missing required sequential"):
+        SBBUSolver(constraint_set)
 
 
 @pytest.mark.unit
@@ -251,7 +250,7 @@ def test_solver_accepts_long_range_interval(sbbu_config_fast):
     for i in range(5):
         for j in range(i + 1, min(i + 4, 5)):
             distance = float(np.linalg.norm(true_coords[i] - true_coords[j]))
-            constraints.append(DistanceConstraint(i, j, distance))
+            constraints.append(DistanceConstraint(i, j, distance, distance))
 
     d04 = float(np.linalg.norm(true_coords[0] - true_coords[4]))
     interval_edge = DistanceConstraint(0, 4, d04 - 0.2, upper_bound=d04 + 0.2)
@@ -474,9 +473,9 @@ def test_soft_pruning_does_not_duplicate_promoted_constraints_across_rounds():
     )
 
     hard_constraints = [
-        DistanceConstraint(0, 1, 1.0),
-        DistanceConstraint(0, 2, 1.5),
-        DistanceConstraint(1, 2, 1.0),
+        DistanceConstraint(0, 1, 1.0, 1.0),
+        DistanceConstraint(0, 2, 1.5, 1.5),
+        DistanceConstraint(1, 2, 1.0, 1.0),
     ]
     promoted_round_1 = DistanceConstraint(0, 4, 1.0, upper_bound=1.1)
     promoted_round_2 = DistanceConstraint(1, 5, 1.0, upper_bound=1.1)
@@ -521,7 +520,6 @@ def test_soft_pruning_does_not_duplicate_promoted_constraints_across_rounds():
         config=config,
         num_nodes=num_nodes,
         hard_constraints=hard_constraints,
-        constraint_violation=lambda _constraint, _distance: 0.0,
         check_time_limit=lambda: None,
         run_refinement_solve=lambda candidate_hard_constraints: (
             calls["candidate_sizes"].append(len(candidate_hard_constraints))
@@ -540,11 +538,11 @@ def test_solver_rejects_interval_sequential_constraint(sbbu_config_fast):
     """Sequential trilateration constraints must stay exact for SBBU placement."""
     constraints = [
         DistanceConstraint(0, 1, 1.0, upper_bound=1.2),  # Non-exact sequential edge
-        DistanceConstraint(0, 2, 1.4),
-        DistanceConstraint(1, 2, 1.0),
-        DistanceConstraint(0, 3, 1.7),
-        DistanceConstraint(1, 3, 1.4),
-        DistanceConstraint(2, 3, 1.0),
+        DistanceConstraint(0, 2, 1.4, 1.4),
+        DistanceConstraint(1, 2, 1.0, 1.0),
+        DistanceConstraint(0, 3, 1.7, 1.7),
+        DistanceConstraint(1, 3, 1.4, 1.4),
+        DistanceConstraint(2, 3, 1.0, 1.0),
     ]
     with pytest.raises(ValueError, match="must be exact"):
         constraint_set = ConstraintSet(4, constraints)
@@ -626,8 +624,8 @@ def test_core_solver_simple_case(simple_tetrahedron, sbbu_config_fast):
     coords = solver.solution_coordinates
     for constraint in constraint_set.constraints:
         actual_dist = np.linalg.norm(coords[constraint.i] - coords[constraint.j])
-        error = abs(actual_dist - constraint.distance)
-    assert error < sbbu_config_fast.distance_tolerance
+        error = abs(actual_dist - constraint.lower_bound)
+        assert error < sbbu_config_fast.distance_tolerance
 
 
 @pytest.mark.unit
@@ -646,7 +644,9 @@ def test_solve_rejects_non_positive_override_max_time(
 
 
 @pytest.mark.unit
-def test_solve_rejects_non_finite_override_max_time(simple_tetrahedron, sbbu_config_fast):
+def test_solve_rejects_non_finite_override_max_time(
+    simple_tetrahedron, sbbu_config_fast
+):
     """solve(max_time=...) must reject NaN/inf overrides."""
     _, constraint_set = simple_tetrahedron
     solver = SBBUSolver(constraint_set, sbbu_config_fast)
@@ -672,31 +672,10 @@ def test_verbose_solver_logging_does_not_write_stdout(simple_tetrahedron, capsys
 
 
 @pytest.mark.unit
-def test_constraint_set_from_edge_list():
-    """Test creating constraint set from edge list."""
-    edges = [(0, 1, 1.0), (1, 2, 1.0), (0, 2, 1.414)]
-    constraint_set = ConstraintSet.from_edge_list(3, edges)
-
-    assert constraint_set.num_nodes == 3
-    assert len(constraint_set.constraints) == 3
-
-
-@pytest.mark.unit
-def test_constraint_set_from_distance_matrix():
-    """Test creating constraint set from distance matrix."""
-    matrix = np.array([[0.0, 1.0, 1.4], [1.0, 0.0, 1.0], [1.4, 1.0, 0.0]])
-
-    constraint_set = ConstraintSet.from_distance_matrix(matrix)
-
-    assert constraint_set.num_nodes == 3
-    assert len(constraint_set.constraints) == 3
-
-
-@pytest.mark.unit
 def test_solver_error_handling():
     """Test solver error handling."""
     # Missing constraint for initialization
-    constraints = [DistanceConstraint(0, 2, 1.0)]  # Missing 0-1, 1-2
+    constraints = [DistanceConstraint(0, 2, 1.0, 1.0)]  # Missing 0-1, 1-2
     constraint_set = ConstraintSet(3, constraints)
 
     config = SBBUConfig(verbose=False)
@@ -709,7 +688,7 @@ def test_solver_error_handling():
 @pytest.mark.unit
 def test_solver_rejects_problems_with_fewer_than_three_nodes():
     """SBBUSolver should fail fast on unsupported problem sizes."""
-    constraints = [DistanceConstraint(0, 1, 1.0)]
+    constraints = [DistanceConstraint(0, 1, 1.0, 1.0)]
 
     with pytest.raises(ValueError, match="at least 3 nodes"):
         SBBUSolver(ConstraintSet(2, constraints), SBBUConfig(verbose=False))
@@ -773,9 +752,8 @@ def test_solution_coordinates_are_isolated_from_runtime_mutation(
 def test_solver_reentrant_resets_runtime_state_after_mutation(sbbu_config_fast):
     """Repeated solve() should reset runtime state and keep results stable."""
     true_coords, constraints = _five_node_reference_constraints()
-    constraints.append(
-        DistanceConstraint(0, 4, float(np.linalg.norm(true_coords[0] - true_coords[4])))
-    )
+    distance = float(np.linalg.norm(true_coords[0] - true_coords[4]))
+    constraints.append(DistanceConstraint(0, 4, distance, distance))
     solver = SBBUSolver(ConstraintSet(5, constraints), sbbu_config_fast)
 
     solver.solve()
@@ -793,11 +771,7 @@ def test_solver_reentrant_resets_runtime_state_after_mutation(sbbu_config_fast):
         actual_distance = float(
             np.linalg.norm(coords_second[constraint.i] - coords_second[constraint.j])
         )
-        upper = (
-            constraint.upper_bound
-            if constraint.upper_bound is not None
-            else constraint.lower_bound
-        )
+        upper = constraint.upper_bound
         assert (
             constraint.lower_bound - tolerance <= actual_distance <= upper + tolerance
         )
@@ -945,7 +919,7 @@ def test_branch_search_checks_time_limit(simple_tetrahedron):
     setattr(solver, "_check_time_limit", forced_timeout)
 
     with pytest.raises(RuntimeError, match="forced-time-check"):
-        solver._branch_and_bound_search(DistanceConstraint(0, 3, 1.7), cluster)
+        solver._branch_and_bound_search(DistanceConstraint(0, 3, 1.7, 1.7), cluster)
 
 
 @pytest.mark.unit
@@ -978,7 +952,7 @@ def test_branch_search_checks_time_limit_each_state(simple_tetrahedron):
     setattr(solver, "_check_time_limit", count_time_check)
 
     with pytest.raises(RuntimeError, match="could not be solved"):
-        solver._branch_and_bound_search(DistanceConstraint(0, 3, 1.7), cluster)
+        solver._branch_and_bound_search(DistanceConstraint(0, 3, 1.7, 1.7), cluster)
 
     assert check_calls["count"] >= 8
 
@@ -1046,9 +1020,6 @@ def test_soft_pruning_checks_time_limit_while_scanning_pairs():
         config=config,
         num_nodes=num_nodes,
         hard_constraints=[],
-        constraint_violation=lambda constraint, distance: abs(
-            distance - constraint.lower_bound
-        ),
         check_time_limit=forced_refiner_timeout,
         run_refinement_solve=lambda _constraints: (_ for _ in ()).throw(
             AssertionError("refinement solve should not run in this test")
@@ -1063,12 +1034,12 @@ def test_soft_pruning_checks_time_limit_while_scanning_pairs():
 def test_solver_rejects_collinear_seed_nodes():
     """Solver should fail fast when first three nodes are collinear."""
     constraints = [
-        DistanceConstraint(0, 1, 1.0),
-        DistanceConstraint(0, 2, 2.0),
-        DistanceConstraint(1, 2, 1.0),
-        DistanceConstraint(0, 3, 3.0),
-        DistanceConstraint(1, 3, 2.0),
-        DistanceConstraint(2, 3, 1.0),
+        DistanceConstraint(0, 1, 1.0, 1.0),
+        DistanceConstraint(0, 2, 2.0, 2.0),
+        DistanceConstraint(1, 2, 1.0, 1.0),
+        DistanceConstraint(0, 3, 3.0, 3.0),
+        DistanceConstraint(1, 3, 2.0, 2.0),
+        DistanceConstraint(2, 3, 1.0, 1.0),
     ]
     solver = SBBUSolver(
         ConstraintSet(4, constraints),
@@ -1083,9 +1054,9 @@ def test_solver_rejects_collinear_seed_nodes():
 def test_solver_allows_collinear_seed_when_problem_has_three_nodes():
     """Three-node problems should allow collinear seeds without trilateration."""
     constraints = [
-        DistanceConstraint(0, 1, 1.0),
-        DistanceConstraint(0, 2, 2.0),
-        DistanceConstraint(1, 2, 1.0),
+        DistanceConstraint(0, 1, 1.0, 1.0),
+        DistanceConstraint(0, 2, 2.0, 2.0),
+        DistanceConstraint(1, 2, 1.0, 1.0),
     ]
     solver = SBBUSolver(
         ConstraintSet(3, constraints),
@@ -1197,9 +1168,9 @@ def test_remaining_time_budget_raises_when_deadline_is_reached(
 def test_solve_checks_timeout_after_refinement_hook(monkeypatch):
     """Solver should re-check time limit after refinement stage."""
     constraints = [
-        DistanceConstraint(0, 1, 1.0),
-        DistanceConstraint(0, 2, 2.0),
-        DistanceConstraint(1, 2, 1.0),
+        DistanceConstraint(0, 1, 1.0, 1.0),
+        DistanceConstraint(0, 2, 2.0, 2.0),
+        DistanceConstraint(1, 2, 1.0, 1.0),
     ]
     solver = SBBUSolver(
         ConstraintSet(3, constraints),
@@ -1548,9 +1519,8 @@ def test_solver_accepts_near_collinear_seed_above_tolerance():
     constraints = []
     for i in range(4):
         for j in range(i + 1, min(i + 4, 4)):
-            constraints.append(
-                DistanceConstraint(i, j, float(np.linalg.norm(coords[i] - coords[j])))
-            )
+            distance = float(np.linalg.norm(coords[i] - coords[j]))
+            constraints.append(DistanceConstraint(i, j, distance, distance))
 
     solver = SBBUSolver(
         ConstraintSet(4, constraints),
@@ -1669,9 +1639,8 @@ def test_union_find_find_handles_deep_parent_chain_without_recursion_error():
 @pytest.mark.unit
 def test_constraint_violation_treats_nan_distance_as_infinite_error():
     """NaN distances should never be treated as satisfied constraints."""
-    metric = MetricsCalculator()
     constraint = DistanceConstraint(0, 1, 1.0, upper_bound=2.0)
 
-    violation = metric.constraint_violation(constraint, float("nan"))
+    violation = constraint.violation(float("nan"))
 
     assert np.isinf(violation)

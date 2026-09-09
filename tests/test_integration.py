@@ -67,7 +67,7 @@ def test_api_consistency():
     for i in range(n):
         for j in range(i + 1, n):
             dist = distance_matrix[i, j]
-            edges.append((i, j, dist))
+            edges.append((i, j, dist, dist))
 
     # Solve with different APIs
     coords1, _ = sbbu.solve_from_distance_matrix(distance_matrix, verbose=False)
@@ -105,7 +105,7 @@ def test_large_problem_performance():
     # Check constraint satisfaction
     for constraint in constraints.constraints:
         actual_dist = np.linalg.norm(coords[constraint.i] - coords[constraint.j])
-        error = abs(actual_dist - constraint.distance)
+        error = abs(actual_dist - constraint.lower_bound)
         assert error < config.distance_tolerance
 
 
@@ -136,7 +136,7 @@ def test_noisy_data_robustness():
             true_dist = np.linalg.norm(true_coords[i] - true_coords[j])
             noise = rng.normal(0, noise_level * true_dist)
             noisy_dist = max(0.1, true_dist + noise)
-            edges.append((i, j, noisy_dist))
+            edges.append((i, j, noisy_dist, noisy_dist))
 
     # Solve with noisy data and appropriate tolerance
     coords, stats = sbbu.solve_from_edge_list(
@@ -149,7 +149,7 @@ def test_noisy_data_robustness():
 
     # Reconstruction error should be reasonable given noise
     reconstruction_errors = []
-    for i, j, noisy_dist in edges:
+    for i, j, noisy_dist, _upper in edges:
         actual_dist = np.linalg.norm(coords[i] - coords[j])
         error = abs(actual_dist - noisy_dist)
         reconstruction_errors.append(error)
@@ -181,14 +181,14 @@ def test_sparse_connectivity():
     for i in range(n - 1):
         for j in range(i + 1, min(i + 4, n)):
             dist = np.linalg.norm(true_coords[i] - true_coords[j])
-            edges.append((i, j, dist))
+            edges.append((i, j, dist, dist))
 
     # Add minimal long-range constraints (geometrically feasible)
     long_range_pairs = [(0, 5), (1, 6), (2, 7)]
     for i, j in long_range_pairs:
         if j < n:
             dist = np.linalg.norm(true_coords[i] - true_coords[j])
-            edges.append((i, j, dist))
+            edges.append((i, j, dist, dist))
 
     coords, stats = sbbu.solve_from_edge_list(n, edges, verbose=False)
 
@@ -197,7 +197,7 @@ def test_sparse_connectivity():
     assert stats.solve_time > 0
 
     # Check constraint satisfaction
-    for i, j, target_dist in edges:
+    for i, j, target_dist, _upper in edges:
         actual_dist = np.linalg.norm(coords[i] - coords[j])
         error = abs(actual_dist - target_dist)
         assert error < 1e-6

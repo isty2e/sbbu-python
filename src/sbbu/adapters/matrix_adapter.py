@@ -2,6 +2,8 @@
 Matrix/array adapter for SBBU algorithm.
 """
 
+from collections.abc import Sequence
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -43,49 +45,129 @@ class MatrixAdapter:
         Returns
         -------
         ConstraintSet
-            Constraint set ready for SBBU solving.
+            Constraint set without a guarantee of solver applicability.
 
         Raises
         ------
         ValueError
-            If ``distance_matrix`` is not a valid symmetric square distance
-            matrix.
+            If the matrix is not real, square, symmetric or zero-diagonal,
+            or an unskipped distance is nonfinite or nonpositive.
         """
         if not MatrixAdapter.validate_distance_matrix(distance_matrix):
             raise ValueError(
                 "Distance matrix must be square, symmetric, and have a zero diagonal"
             )
 
-        return ConstraintSet.from_distance_matrix(
-            distance_matrix, ignore_nan, ignore_inf, ignore_zero
-        )
+        num_nodes = distance_matrix.shape[0]
+        constraints = []
+        for i in range(num_nodes):
+            for j in range(i + 1, num_nodes):
+                distance = float(distance_matrix[i, j])
+                if np.isnan(distance) and ignore_nan:
+                    continue
+                if np.isinf(distance) and ignore_inf:
+                    continue
+                if np.isfinite(distance) and distance <= 0 and ignore_zero:
+                    continue
+                constraints.append(DistanceConstraint(i, j, distance, distance))
+        return ConstraintSet(num_nodes, constraints)
 
     @staticmethod
-    def from_edge_list(
-        num_nodes: int, edges: list[tuple[int, int, float]]
+    def from_bounds_matrices(
+        lower_bounds: NDArray[np.float64],
+        upper_bounds: NDArray[np.float64],
+        *,
+        ignore_nan: bool = True,
     ) -> ConstraintSet:
-        """
-        Create a constraint set from an edge list.
+        """Create constraints from paired finite distance bounds.
 
         Parameters
         ----------
-        num_nodes : int
-            Total number of nodes.
-        edges : list[tuple[int, int, float]]
-            List of ``(i, j, distance)`` triples.
+        lower_bounds : NDArray[np.float64]
+            Symmetric square matrix of positive lower bounds, with zero diagonal.
+        upper_bounds : NDArray[np.float64]
+            Same-shaped symmetric upper bounds, with zero diagonal. Each upper
+            bound must be at least its lower bound. Equality denotes exact input.
+        ignore_nan : bool, default=True
+            Omit a pair only when both bounds are NaN in both directions.
 
         Returns
         -------
         ConstraintSet
-            Constraint set ready for SBBU solving.
+            Canonical intervals, without a guarantee of solver applicability.
 
         Raises
         ------
         ValueError
-            If edge endpoints or distances are invalid for
-            :class:`~sbbu.constraints.DistanceConstraint`.
+            If shapes, symmetry, diagonals, missingness or bounds are invalid.
+            Infinity and one-sided bounds are unsupported.
+
+        Notes
+        -----
+        Symmetry and bound ordering are checked without tolerance. Positive-width
+        intervals are preserved, even when narrower than solver tolerance.
         """
-        return ConstraintSet.from_edge_list(num_nodes, edges)
+        for bounds in (lower_bounds, upper_bounds):
+            if bounds.ndim != 2 or bounds.shape[0] != bounds.shape[1]:
+                raise ValueError("Bounds matrices must be square and two-dimensional")
+            if bounds.dtype.kind not in "iuf":
+                raise ValueError("Bounds matrices must contain real numeric values")
+            if not np.all(np.diag(bounds) == 0):
+                raise ValueError("Bounds matrices must have zero diagonals")
+            if not np.array_equal(bounds, bounds.T, equal_nan=True):
+                raise ValueError("Bounds matrices must be symmetric")
+        if lower_bounds.shape != upper_bounds.shape:
+            raise ValueError("Bounds matrices must have the same shape")
+
+        missing = np.isnan(lower_bounds)
+        if not np.array_equal(missing, np.isnan(upper_bounds)):
+            raise ValueError("Missing lower and upper bounds must match")
+        if not ignore_nan and np.any(missing):
+            raise ValueError("Bounds must be finite when ignore_nan=False")
+        if np.any(np.isinf(lower_bounds)) or np.any(np.isinf(upper_bounds)):
+            raise ValueError("Bounds must be finite; one-sided bounds are unsupported")
+
+        num_nodes = lower_bounds.shape[0]
+        constraints = [
+            DistanceConstraint(i, j, lower_bounds[i, j], upper_bounds[i, j])
+            for i in range(num_nodes)
+            for j in range(i + 1, num_nodes)
+            if not missing[i, j]
+        ]
+        return ConstraintSet(num_nodes, constraints)
+
+    @staticmethod
+    def from_edge_list(
+        num_nodes: int, edges: Sequence[tuple[int, int, float, float]]
+    ) -> ConstraintSet:
+        """Create constraints from four-field edge records.
+
+        Parameters
+        ----------
+        num_nodes : int
+            Total number of nodes, including isolated nodes.
+        edges : Sequence[tuple[int, int, float, float]]
+            Records ``(i, j, lower_bound, upper_bound)``. Equal bounds denote
+            exact distances. Either endpoint order is accepted.
+
+        Returns
+        -------
+        ConstraintSet
+            Canonical intervals, without a guarantee of solver applicability.
+
+        Raises
+        ------
+        ValueError
+            If a record has the wrong length, endpoints or bounds are invalid.
+        TypeError
+            If node indices are not integers.
+        """
+        constraints = []
+        for i, j, lower, upper in edges:
+            if i > j:
+                i, j = j, i
+            constraints.append(DistanceConstraint(i, j, lower, upper))
+        return ConstraintSet(num_nodes, constraints)
 
     @staticmethod
     def from_adjacency_matrix(
@@ -139,7 +221,7 @@ class MatrixAdapter:
                         raise ValueError(
                             f"Connected edge ({i}, {j}) has invalid distance {dist}"
                         )
-                    constraints.append(DistanceConstraint(i, j, dist))
+                    constraints.append(DistanceConstraint(i, j, dist, dist))
 
         return ConstraintSet(num_nodes, constraints)
 
@@ -212,7 +294,7 @@ class MatrixAdapter:
             tolerance, and is symmetric (treating matching ``NaN`` entries as
             valid).
         """
-        if distance_matrix.ndim != 2:
+        if distance_matrix.ndim != 2 or distance_matrix.dtype.kind not in "iuf":
             return False
 
         if distance_matrix.shape[0] != distance_matrix.shape[1]:

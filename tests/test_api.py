@@ -46,7 +46,7 @@ def test_solve_from_edge_list(edge_list_simple):
     assert stats.mean_distance_error < 1e-6
 
     # Check edge distance reconstruction
-    for i, j, expected_dist in edges:
+    for i, j, expected_dist, _upper in edges:
         actual_dist = np.linalg.norm(coords[i] - coords[j])
         assert abs(expected_dist - actual_dist) < 1e-6
 
@@ -173,7 +173,7 @@ def test_api_error_handling():
         sbbu.solve_from_distance_matrix(bad_matrix)
 
     # Edge list with negative distances
-    bad_edges = [(0, 1, -1.0)]
+    bad_edges = [(0, 1, -1.0, -1.0)]
     with pytest.raises(Exception):
         sbbu.solve_from_edge_list(2, bad_edges)
 
@@ -218,7 +218,7 @@ def test_solve_from_distance_matrix_rejects_zero_off_diagonal_early():
         ]
     )
 
-    with pytest.raises(ValueError, match="Non-positive distance"):
+    with pytest.raises(ValueError, match="positive"):
         sbbu.solve_from_distance_matrix(matrix, verbose=False)
 
 

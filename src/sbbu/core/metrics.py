@@ -15,32 +15,7 @@ class MetricsCalculator:
     """Compute distance-geometry quality metrics from runtime state."""
 
     @staticmethod
-    def constraint_bounds(constraint: DistanceConstraint) -> tuple[float, float]:
-        """Return [lower, upper] bounds with exact constraints normalized."""
-        upper = (
-            constraint.upper_bound
-            if constraint.upper_bound is not None
-            else constraint.lower_bound
-        )
-        return constraint.lower_bound, upper
-
-    @classmethod
-    def constraint_violation(
-        cls, constraint: DistanceConstraint, distance: float
-    ) -> float:
-        """Return absolute violation of a constraint interval."""
-        if not np.isfinite(distance):
-            return float("inf")
-        lower, upper = cls.constraint_bounds(constraint)
-        if distance < lower:
-            return lower - distance
-        if distance > upper:
-            return distance - upper
-        return 0.0
-
-    @classmethod
     def constraint_errors(
-        cls,
         constraints: Sequence[DistanceConstraint],
         coordinates: NDArray[np.float64],
     ) -> NDArray[np.float64]:
@@ -66,7 +41,7 @@ class MetricsCalculator:
             (c.lower_bound for c in constraints), dtype=np.float64, count=count
         )
         upper = np.fromiter(
-            (cls.constraint_bounds(c)[1] for c in constraints),
+            (c.upper_bound for c in constraints),
             dtype=np.float64,
             count=count,
         )
@@ -95,8 +70,7 @@ class MetricsCalculator:
             pos_j = state.coordinates[j]
             actual_distance = float(np.linalg.norm(pos_i - pos_j))
             candidate_violations = [
-                self.constraint_violation(constraint, actual_distance)
-                for constraint in candidates
+                constraint.violation(actual_distance) for constraint in candidates
             ]
             violations.append(min(candidate_violations))
 
