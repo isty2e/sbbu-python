@@ -2,6 +2,8 @@
 Tests for the high-level SBBU API.
 """
 
+from typing import cast
+
 import numpy as np
 import pytest
 
@@ -267,7 +269,7 @@ def test_create_test_constraints_rejects_node_count_type(
     num_nodes: float | str | None,
 ) -> None:
     with pytest.raises(TypeError, match="num_nodes"):
-        sbbu.create_test_constraints(num_nodes=num_nodes)
+        sbbu.create_test_constraints(num_nodes=cast(int, num_nodes))
 
 
 @pytest.mark.parametrize("connectivity", [True, "0.5", None])
@@ -275,7 +277,7 @@ def test_create_test_constraints_rejects_connectivity_type(
     connectivity: bool | str | None,
 ) -> None:
     with pytest.raises(TypeError, match="connectivity"):
-        sbbu.create_test_constraints(connectivity=connectivity)
+        sbbu.create_test_constraints(connectivity=cast(float, connectivity))
 
 
 @pytest.mark.parametrize("noise_level", [True, "0.1", None])
@@ -283,7 +285,7 @@ def test_create_test_constraints_rejects_noise_type(
     noise_level: bool | str | None,
 ) -> None:
     with pytest.raises(TypeError, match="noise_level"):
-        sbbu.create_test_constraints(noise_level=noise_level)
+        sbbu.create_test_constraints(noise_level=cast(float, noise_level))
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])

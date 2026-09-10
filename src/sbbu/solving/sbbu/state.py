@@ -8,16 +8,17 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from ..constraints import DistanceConstraint
-from ..validation import validate_positive_float
+from ...constraints import ConstraintSet, DistanceConstraint
+from ...validation import validate_positive_float
+from ..run import SBBUStage, SolveError, SolveTimeoutError
 from .cluster import ReflectionCluster, UnionFind
 
 
-class SBBUTimeoutError(RuntimeError):
+class SBBUTimeoutError(SolveTimeoutError):
     """Signal that the configured solver time budget has been exceeded."""
 
 
-class SBBUSolveInfeasibleError(RuntimeError):
+class SBBUSolveInfeasibleError(SolveError):
     """Signal that SBBU could not satisfy a constraint within its search limits."""
 
 
@@ -99,51 +100,18 @@ class SBBUConfig:
 
 
 @dataclass
-class SBBUStats:
-    """
-    Statistics collected during a solver run.
+class SBBUWork:
+    """Accumulate native SBBU counters within one active solve."""
 
-    Attributes
-    ----------
-    solve_time : float
-        Total wall-clock solve time in seconds.
-    iterations_used : int
-        Number of branch-and-bound iterations consumed.
-    constraints_processed : int
-        Count of long-range constraints processed.
-    mean_distance_error : float
-        Mean hard-constraint violation.
-    largest_distance_error : float
-        Maximum hard-constraint violation.
-    soft_ambiguous_constraints : int
-        Number of unresolved soft-ambiguous groups after refinement.
-    mean_soft_violation : float
-        Mean minimal violation across unresolved soft-ambiguous groups.
-    max_soft_violation : float
-        Maximum minimal violation across unresolved soft-ambiguous groups.
-    soft_pruning_rounds : int
-        Number of soft-pruning refinement rounds executed.
-    soft_pruned_constraints : int
-        Number of soft constraints promoted to hard constraints.
-    soft_pruned_candidates : int
-        Number of soft candidates removed during refinement.
-    """
-
-    solve_time: float = 0.0
-    iterations_used: int = 0
+    iterations: int = 0
     constraints_processed: int = 0
-    mean_distance_error: float = 0.0
-    largest_distance_error: float = 0.0
-    soft_ambiguous_constraints: int = 0
-    mean_soft_violation: float = 0.0
-    max_soft_violation: float = 0.0
     soft_pruning_rounds: int = 0
     soft_pruned_constraints: int = 0
     soft_pruned_candidates: int = 0
 
 
 @dataclass
-class ProblemState:
+class SBBUState:
     """Mutable runtime state for one solver pass."""
 
     coordinates: NDArray[np.float64]
@@ -157,7 +125,25 @@ class ProblemState:
     reflection_flags: list[bool]
     best_reflection_flags: list[bool]
     num_cluster_nodes: int
-    stats: SBBUStats
+    work: SBBUWork
+
+    def stage(self, seconds: float) -> SBBUStage:
+        """Snapshot native work and remaining soft-alternative quality."""
+        violations = []
+        for (i, j), candidates in self.active_soft_ambiguous_constraints:
+            distance = float(np.linalg.norm(self.coordinates[i] - self.coordinates[j]))
+            violations.append(min(c.violation(distance) for c in candidates))
+        return SBBUStage(
+            seconds=seconds,
+            iterations=self.work.iterations,
+            constraints_processed=self.work.constraints_processed,
+            soft_pruning_rounds=self.work.soft_pruning_rounds,
+            soft_pruned_constraints=self.work.soft_pruned_constraints,
+            soft_pruned_candidates=self.work.soft_pruned_candidates,
+            unresolved_soft_constraints=len(violations),
+            mean_soft_violation=float(np.mean(violations)) if violations else 0.0,
+            max_soft_violation=max(violations, default=0.0),
+        )
 
 
 @dataclass
@@ -166,14 +152,13 @@ class RefinementContext:
 
     Parameters
     ----------
-    state : ProblemState
+    state : SBBUState
         Runtime coordinates and statistics updated during refinement.
     config : SBBUConfig
         Refinement policy and numerical acceptance limits.
-    num_nodes : int
-        Number of nodes in the original problem.
-    hard_constraints : list[DistanceConstraint]
-        Canonical hard constraints for the initial realization.
+    constraints : ConstraintSet
+        Canonical original observations; working scalar projections are deferred
+        until soft refinement is actually needed.
     check_time_limit : Callable[[], None]
         Check the enclosing solve deadline, raising when its budget is exhausted.
     run_refinement_solve : Callable
@@ -181,11 +166,10 @@ class RefinementContext:
         statistics or raising on failure.
     """
 
-    state: ProblemState
+    state: SBBUState
     config: SBBUConfig
-    num_nodes: int
-    hard_constraints: list[DistanceConstraint]
+    constraints: ConstraintSet
     check_time_limit: Callable[[], None]
     run_refinement_solve: Callable[
-        [list[DistanceConstraint]], tuple[NDArray[np.float64], SBBUStats]
+        [list[DistanceConstraint]], tuple[NDArray[np.float64], SBBUStage]
     ]

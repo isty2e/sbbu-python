@@ -5,7 +5,7 @@ Cluster and disjoint-set primitives for SBBU reflections.
 import numpy as np
 from numpy.typing import NDArray
 
-from ..geometry import normalize_vector
+from ...geometry import normalize_vector
 
 
 class ReflectionCluster:
@@ -20,7 +20,7 @@ class ReflectionCluster:
         Shared ``(num_nodes, 3)`` coordinate array updated in place.
     """
 
-    def __init__(self, num_nodes: int, coordinates: NDArray[np.float64]):
+    def __init__(self, num_nodes: int, coordinates: NDArray[np.float64]) -> None:
         """Initialize reflection-plane storage for one cluster.
 
         Parameters
@@ -251,7 +251,7 @@ class UnionFind:
         Number of elements managed by the disjoint-set structure.
     """
 
-    def __init__(self, size: int):
+    def __init__(self, size: int) -> None:
         """Initialize with given size."""
         if size <= 0:
             raise ValueError(f"size must be positive, got {size}")

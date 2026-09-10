@@ -1,11 +1,8 @@
-"""
-High-level API for SBBU algorithm.
-
-This module provides convenient functions for common SBBU use cases.
-"""
+"""Raw-input reconstruction entrypoints with SBBU-first method selection."""
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,7 +10,8 @@ from numpy.typing import NDArray
 from .adapters.matrix_adapter import MatrixAdapter
 from .adapters.nmr_adapter import NMRAdapter
 from .constraints import ConstraintSet
-from .core.solver import SBBUConfig, SBBUSolver, SBBUStats
+from .solving import solve
+from .solving.run import SolveStats
 
 
 def solve_from_nmr(
@@ -21,9 +19,11 @@ def solve_from_nmr(
     distance_tolerance: float = 1e-7,
     max_time: float = 60.0,
     verbose: bool = True,
-) -> tuple[NDArray[np.float64], SBBUStats]:
+    *,
+    method: Literal["mm", "trf"] | None = None,
+) -> tuple[NDArray[np.float64], SolveStats]:
     """
-    Solve SBBU from an NMR file.
+    Reconstruct coordinates from an NMR file.
 
     Parameters
     ----------
@@ -32,13 +32,17 @@ def solve_from_nmr(
     distance_tolerance : float, default=1e-7
         Distance tolerance used by the solver.
     max_time : float, default=60.0
-        Maximum solving time in seconds.
+        Whole-solve time limit in seconds, excluding input normalization.
     verbose : bool, default=True
-        If ``True``, emit solver progress logs.
+        If ``True``, emit SBBU progress logs when that backend is selected.
+
+    method : {"mm", "trf", None}, optional
+        Continuous method or automatic policy. Current-order SBBU takes
+        precedence regardless of this option.
 
     Returns
     -------
-    tuple[numpy.typing.NDArray[numpy.float64], SBBUStats]
+    tuple[numpy.typing.NDArray[numpy.float64], SolveStats]
         A tuple ``(coordinates, stats)`` with solved coordinates and run statistics.
 
     Raises
@@ -47,13 +51,7 @@ def solve_from_nmr(
         Raised when loading input, constructing configuration, or solving fails.
     """
     constraints = NMRAdapter.from_nmr_file(nmr_file)
-    config = SBBUConfig(
-        distance_tolerance=distance_tolerance, max_time=max_time, verbose=verbose
-    )
-
-    solver = SBBUSolver(constraints, config)
-    stats = solver.solve()
-    return solver.solution_coordinates, stats
+    return solve(constraints, distance_tolerance, max_time, verbose, method)
 
 
 def solve_from_distance_matrix(
@@ -64,9 +62,11 @@ def solve_from_distance_matrix(
     ignore_nan: bool = True,
     ignore_inf: bool = False,
     ignore_zero: bool = False,
-) -> tuple[NDArray[np.float64], SBBUStats]:
+    *,
+    method: Literal["mm", "trf"] | None = None,
+) -> tuple[NDArray[np.float64], SolveStats]:
     """
-    Solve SBBU from a distance matrix.
+    Reconstruct coordinates from a distance matrix.
 
     Parameters
     ----------
@@ -75,9 +75,9 @@ def solve_from_distance_matrix(
     distance_tolerance : float, default=1e-7
         Distance tolerance used by the solver.
     max_time : float, default=60.0
-        Maximum solving time in seconds.
+        Whole-solve time limit in seconds, excluding input normalization.
     verbose : bool, default=True
-        If ``True``, emit solver progress logs.
+        If ``True``, emit SBBU progress logs when that backend is selected.
     ignore_nan : bool, default=True
         If ``True``, ignore ``NaN`` entries in the distance matrix.
     ignore_inf : bool, default=False
@@ -85,9 +85,13 @@ def solve_from_distance_matrix(
     ignore_zero : bool, default=False
         If ``True``, ignore non-positive off-diagonal distances.
 
+    method : {"mm", "trf", None}, optional
+        Continuous method or automatic policy. Current-order SBBU takes
+        precedence regardless of this option.
+
     Returns
     -------
-    tuple[numpy.typing.NDArray[numpy.float64], SBBUStats]
+    tuple[numpy.typing.NDArray[numpy.float64], SolveStats]
         A tuple ``(coordinates, stats)`` with solved coordinates and run statistics.
 
     Raises
@@ -101,13 +105,7 @@ def solve_from_distance_matrix(
         ignore_inf=ignore_inf,
         ignore_zero=ignore_zero,
     )
-    config = SBBUConfig(
-        distance_tolerance=distance_tolerance, max_time=max_time, verbose=verbose
-    )
-
-    solver = SBBUSolver(constraints, config)
-    stats = solver.solve()
-    return solver.solution_coordinates, stats
+    return solve(constraints, distance_tolerance, max_time, verbose, method)
 
 
 def solve_from_bounds_matrices(
@@ -118,7 +116,8 @@ def solve_from_bounds_matrices(
     verbose: bool = True,
     *,
     ignore_nan: bool = True,
-) -> tuple[NDArray[np.float64], SBBUStats]:
+    method: Literal["mm", "trf"] | None = None,
+) -> tuple[NDArray[np.float64], SolveStats]:
     """Solve from paired distance-bound matrices.
 
     Parameters
@@ -132,35 +131,36 @@ def solve_from_bounds_matrices(
         Absolute tolerance for accepting constraint violations, not for deciding
         whether an input interval is exact.
     max_time : float, default=60.0
-        Maximum solving time in seconds.
+        Whole-solve time limit in seconds, excluding input normalization.
     verbose : bool, default=True
-        Whether to emit solver progress logs.
+        Whether to emit SBBU progress logs when that backend is selected.
     ignore_nan : bool, default=True
         Omit pairs with matching NaNs in both bounds and directions.
 
+    method : {"mm", "trf", None}, optional
+        Continuous method or automatic policy. Current-order SBBU takes
+        precedence regardless of this option.
+
     Returns
     -------
-    tuple[NDArray[np.float64], SBBUStats]
+    tuple[NDArray[np.float64], SolveStats]
         Coordinates in input node order and solver statistics.
 
     Raises
     ------
     ValueError
-        If matrix bounds are invalid or required exact predecessors are absent.
-    SBBUSolveInfeasibleError
-        If the bounded search cannot satisfy the hard constraints.
-    SBBUTimeoutError
+        If matrix bounds or option values are invalid.
+    UnsupportedProblemError
+        If neither SBBU nor the current continuous capability admits the input.
+    SolveError
+        If bounded solving cannot produce an originally feasible realization.
+    SolveTimeoutError
         If the solve exceeds the time limit.
     """
     constraints = MatrixAdapter.from_bounds_matrices(
         lower_bounds, upper_bounds, ignore_nan=ignore_nan
     )
-    config = SBBUConfig(
-        distance_tolerance=distance_tolerance, max_time=max_time, verbose=verbose
-    )
-    solver = SBBUSolver(constraints, config)
-    stats = solver.solve()
-    return solver.solution_coordinates, stats
+    return solve(constraints, distance_tolerance, max_time, verbose, method)
 
 
 def solve_from_edge_list(
@@ -169,9 +169,11 @@ def solve_from_edge_list(
     distance_tolerance: float = 1e-7,
     max_time: float = 60.0,
     verbose: bool = True,
-) -> tuple[NDArray[np.float64], SBBUStats]:
+    *,
+    method: Literal["mm", "trf"] | None = None,
+) -> tuple[NDArray[np.float64], SolveStats]:
     """
-    Solve SBBU from an edge list.
+    Reconstruct coordinates from an edge list.
 
     Parameters
     ----------
@@ -183,13 +185,17 @@ def solve_from_edge_list(
     distance_tolerance : float, default=1e-7
         Distance tolerance used by the solver.
     max_time : float, default=60.0
-        Maximum solving time in seconds.
+        Whole-solve time limit in seconds, excluding input normalization.
     verbose : bool, default=True
-        If ``True``, emit solver progress logs.
+        If ``True``, emit SBBU progress logs when that backend is selected.
+
+    method : {"mm", "trf", None}, optional
+        Continuous method or automatic policy. Current-order SBBU takes
+        precedence regardless of this option.
 
     Returns
     -------
-    tuple[numpy.typing.NDArray[numpy.float64], SBBUStats]
+    tuple[numpy.typing.NDArray[numpy.float64], SolveStats]
         A tuple ``(coordinates, stats)`` with solved coordinates and run statistics.
 
     Raises
@@ -198,13 +204,7 @@ def solve_from_edge_list(
         Raised when parsing input, constructing configuration, or solving fails.
     """
     constraints = MatrixAdapter.from_edge_list(num_nodes, edges)
-    config = SBBUConfig(
-        distance_tolerance=distance_tolerance, max_time=max_time, verbose=verbose
-    )
-
-    solver = SBBUSolver(constraints, config)
-    stats = solver.solve()
-    return solver.solution_coordinates, stats
+    return solve(constraints, distance_tolerance, max_time, verbose, method)
 
 
 def create_test_constraints(

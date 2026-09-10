@@ -2,6 +2,8 @@
 Tests for validation helpers.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 
@@ -164,15 +166,20 @@ def test_sbbu_config_rejects_non_numeric_soft_pruning_thresholds():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("field_name", [
-    "soft_pruning_acceptance_tolerance",
-    "soft_pruning_candidate_window",
-    "soft_pruning_min_margin",
-])
-def test_sbbu_config_rejects_non_finite_soft_pruning_thresholds(field_name):
+@pytest.mark.parametrize(
+    "make_config",
+    [
+        lambda value: SBBUConfig(soft_pruning_acceptance_tolerance=value),
+        lambda value: SBBUConfig(soft_pruning_candidate_window=value),
+        lambda value: SBBUConfig(soft_pruning_min_margin=value),
+    ],
+)
+def test_sbbu_config_rejects_non_finite_soft_pruning_thresholds(
+    make_config: Callable[[float], SBBUConfig],
+) -> None:
     """Soft-pruning thresholds should reject non-finite numeric values."""
     with pytest.raises(ValueError, match="finite"):
-        SBBUConfig(**{field_name: np.nan})
+        make_config(np.nan)
 
     with pytest.raises(ValueError, match="finite"):
-        SBBUConfig(**{field_name: np.inf})
+        make_config(np.inf)

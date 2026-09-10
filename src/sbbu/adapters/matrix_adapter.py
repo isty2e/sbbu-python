@@ -59,18 +59,23 @@ class MatrixAdapter:
             )
 
         num_nodes = distance_matrix.shape[0]
-        constraints = []
-        for i in range(num_nodes):
-            for j in range(i + 1, num_nodes):
-                distance = float(distance_matrix[i, j])
-                if np.isnan(distance) and ignore_nan:
-                    continue
-                if np.isinf(distance) and ignore_inf:
-                    continue
-                if np.isfinite(distance) and distance <= 0 and ignore_zero:
-                    continue
-                constraints.append(DistanceConstraint(i, j, distance, distance))
-        return ConstraintSet(num_nodes, constraints)
+        rows, columns = np.triu_indices(num_nodes, k=1)
+        distances = distance_matrix[rows, columns]
+        omitted = np.zeros(len(rows), dtype=bool)
+        if ignore_nan:
+            omitted |= np.isnan(distances)
+        if ignore_inf:
+            omitted |= np.isinf(distances)
+        if ignore_zero:
+            omitted |= np.isfinite(distances) & (distances <= 0)
+        present = ~omitted
+        return ConstraintSet.from_bounds_arrays(
+            num_nodes,
+            rows[present],
+            columns[present],
+            distances[present],
+            distances[present],
+        )
 
     @staticmethod
     def from_bounds_matrices(
@@ -128,13 +133,16 @@ class MatrixAdapter:
             raise ValueError("Bounds must be finite; one-sided bounds are unsupported")
 
         num_nodes = lower_bounds.shape[0]
-        constraints = [
-            DistanceConstraint(i, j, lower_bounds[i, j], upper_bounds[i, j])
-            for i in range(num_nodes)
-            for j in range(i + 1, num_nodes)
-            if not missing[i, j]
-        ]
-        return ConstraintSet(num_nodes, constraints)
+        rows, columns = np.triu_indices(num_nodes, k=1)
+        present = ~missing[rows, columns]
+        rows, columns = rows[present], columns[present]
+        return ConstraintSet.from_bounds_arrays(
+            num_nodes,
+            rows,
+            columns,
+            lower_bounds[rows, columns],
+            upper_bounds[rows, columns],
+        )
 
     @staticmethod
     def from_edge_list(
@@ -211,19 +219,22 @@ class MatrixAdapter:
             raise ValueError("Distance matrix must be symmetric")
 
         num_nodes = adjacency_matrix.shape[0]
-        constraints = []
-
-        for i in range(num_nodes):
-            for j in range(i + 1, num_nodes):
-                if adjacency_matrix[i, j] > 0:  # Connected
-                    dist = distance_matrix[i, j]
-                    if np.isnan(dist) or np.isinf(dist) or dist <= 0:
-                        raise ValueError(
-                            f"Connected edge ({i}, {j}) has invalid distance {dist}"
-                        )
-                    constraints.append(DistanceConstraint(i, j, dist, dist))
-
-        return ConstraintSet(num_nodes, constraints)
+        rows, columns = np.triu_indices(num_nodes, k=1)
+        connected = adjacency_matrix[rows, columns] > 0
+        rows, columns = rows[connected], columns[connected]
+        distances = distance_matrix[rows, columns]
+        if distances.dtype.kind not in "iuf":
+            raise ValueError("Connected distances must be real numbers")
+        invalid = ~np.isfinite(distances) | (distances <= 0)
+        if np.any(invalid):
+            index = int(np.flatnonzero(invalid)[0])
+            raise ValueError(
+                f"Connected edge ({rows[index]}, {columns[index]}) "
+                f"has invalid distance {distances[index]}"
+            )
+        return ConstraintSet.from_bounds_arrays(
+            num_nodes, rows, columns, distances, distances
+        )
 
     @staticmethod
     def to_distance_matrix(

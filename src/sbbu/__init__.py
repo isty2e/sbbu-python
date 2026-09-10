@@ -29,6 +29,15 @@ from .api import (
     solve_from_nmr,
 )
 from .core.solver import SBBUConfig, SBBUSolver
+from .solving.run import (
+    MMStage,
+    SBBUStage,
+    SolveError,
+    SolveStats,
+    SolveTimeoutError,
+    TRFStage,
+    UnsupportedProblemError,
+)
 
 try:
     __version__ = version("sbbu")
@@ -36,8 +45,15 @@ except PackageNotFoundError:
     __version__ = "0+unknown"
 
 __all__ = [
+    "MMStage",
     "SBBUConfig",
     "SBBUSolver",
+    "SBBUStage",
+    "SolveError",
+    "SolveStats",
+    "SolveTimeoutError",
+    "TRFStage",
+    "UnsupportedProblemError",
     "create_test_constraints",
     "solve_from_bounds_matrices",
     "solve_from_distance_matrix",

@@ -7,12 +7,12 @@ import logging
 import numpy as np
 from numpy.typing import NDArray
 
-from ..constraints import DistanceConstraint
-from .types import (
-    ProblemState,
+from ...constraints import DistanceConstraint
+from ..run import SBBUStage
+from .state import (
     RefinementContext,
     SBBUSolveInfeasibleError,
-    SBBUStats,
+    SBBUState,
     SBBUTimeoutError,
 )
 
@@ -41,7 +41,7 @@ class SoftPruningRefiner:
             (pair, list(candidates))
             for pair, candidates in state.active_soft_ambiguous_constraints
         ]
-        hard_constraints = list(context.hard_constraints)
+        hard_constraints = context.constraints.get_hard_constraints()
         promoted_constraints: list[DistanceConstraint] = []
         pruned_candidates = 0
         rounds_used = 0
@@ -85,7 +85,7 @@ class SoftPruningRefiner:
                     state,
                     coordinates,
                     refinement_stats,
-                    context.num_nodes,
+                    context.constraints.num_nodes,
                 )
                 promoted_constraints.extend(newly_promoted)
                 hard_constraints = candidate_hard_constraints
@@ -200,23 +200,23 @@ class SoftPruningRefiner:
 
     @staticmethod
     def _apply_refinement_solution(
-        state: ProblemState,
+        state: SBBUState,
         coordinates: NDArray[np.float64],
-        refinement_stats: SBBUStats,
+        refinement_stats: SBBUStage,
         num_nodes: int,
     ) -> None:
         """Apply successful refinement results into the active solver state."""
         state.coordinates[:] = coordinates
         state.current_node = num_nodes - 1
-        state.stats.iterations_used += refinement_stats.iterations_used
-        state.stats.constraints_processed = max(
-            state.stats.constraints_processed,
+        state.work.iterations += refinement_stats.iterations
+        state.work.constraints_processed = max(
+            state.work.constraints_processed,
             refinement_stats.constraints_processed,
         )
 
     @staticmethod
     def _finalize_refinement(
-        state: ProblemState,
+        state: SBBUState,
         unresolved: list[_AmbiguousGroup],
         rounds_used: int,
         promoted_constraints: list[DistanceConstraint],
@@ -224,6 +224,6 @@ class SoftPruningRefiner:
     ) -> None:
         """Persist refinement outcomes into runtime statistics/state."""
         state.active_soft_ambiguous_constraints = unresolved
-        state.stats.soft_pruning_rounds = rounds_used
-        state.stats.soft_pruned_constraints = len(promoted_constraints)
-        state.stats.soft_pruned_candidates = pruned_candidates
+        state.work.soft_pruning_rounds = rounds_used
+        state.work.soft_pruned_constraints = len(promoted_constraints)
+        state.work.soft_pruned_candidates = pruned_candidates

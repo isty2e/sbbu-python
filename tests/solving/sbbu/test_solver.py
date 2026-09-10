@@ -6,16 +6,24 @@ import numpy as np
 import pytest
 
 from sbbu.constraints import ConstraintSet, DistanceConstraint
-from sbbu.core.cluster import ReflectionCluster, UnionFind
-from sbbu.core.refiner import SoftPruningRefiner
 from sbbu.core.solver import SBBUConfig, SBBUSolver
-from sbbu.core.types import (
-    ProblemState,
+from sbbu.solving.run import SBBUStage, SolveBudget, SolveStats
+from sbbu.solving.sbbu.cluster import ReflectionCluster, UnionFind
+from sbbu.solving.sbbu.refinement import SoftPruningRefiner
+from sbbu.solving.sbbu.state import (
     RefinementContext,
     SBBUSolveInfeasibleError,
-    SBBUStats,
+    SBBUState,
     SBBUTimeoutError,
+    SBBUWork,
 )
+
+
+def _sbbu_stage(stats: SolveStats) -> SBBUStage:
+    assert len(stats.stages) == 1
+    stage = stats.stages[0]
+    assert isinstance(stage, SBBUStage)
+    return stage
 
 
 @pytest.mark.unit
@@ -291,9 +299,9 @@ def test_solver_reports_soft_ambiguous_violations(sbbu_config_fast):
     solver = SBBUSolver(ConstraintSet(5, constraints), config)
     stats = solver.solve()
 
-    assert stats.soft_ambiguous_constraints == 1
-    assert stats.mean_soft_violation < 1e-6
-    assert stats.max_soft_violation < 1e-6
+    assert _sbbu_stage(stats).unresolved_soft_constraints == 1
+    assert _sbbu_stage(stats).mean_soft_violation < 1e-6
+    assert _sbbu_stage(stats).max_soft_violation < 1e-6
 
 
 @pytest.mark.unit
@@ -322,11 +330,11 @@ def test_soft_pruning_promotes_confident_candidate():
     solver = SBBUSolver(ConstraintSet(5, constraints), config)
     stats = solver.solve()
 
-    assert stats.soft_pruning_rounds >= 1
-    assert stats.soft_pruned_constraints == 1
-    assert stats.soft_ambiguous_constraints == 0
-    assert stats.mean_soft_violation == 0.0
-    assert stats.max_soft_violation == 0.0
+    assert _sbbu_stage(stats).soft_pruning_rounds >= 1
+    assert _sbbu_stage(stats).soft_pruned_constraints == 1
+    assert _sbbu_stage(stats).unresolved_soft_constraints == 0
+    assert _sbbu_stage(stats).mean_soft_violation == 0.0
+    assert _sbbu_stage(stats).max_soft_violation == 0.0
 
 
 @pytest.mark.unit
@@ -363,9 +371,9 @@ def test_soft_pruning_refinement_failure_keeps_ambiguous_group(monkeypatch):
 
     stats = solver.solve()
 
-    assert stats.soft_pruning_rounds >= 1
-    assert stats.soft_pruned_constraints == 0
-    assert stats.soft_ambiguous_constraints == 1
+    assert _sbbu_stage(stats).soft_pruning_rounds >= 1
+    assert _sbbu_stage(stats).soft_pruned_constraints == 0
+    assert _sbbu_stage(stats).unresolved_soft_constraints == 1
 
 
 @pytest.mark.unit
@@ -451,7 +459,7 @@ def test_soft_pruning_does_not_duplicate_promoted_constraints_across_rounds():
         cluster.start_node = idx
         cluster.end_node = idx
 
-    state = ProblemState(
+    state = SBBUState(
         coordinates=coordinates,
         current_node=num_nodes - 1,
         active_soft_ambiguous_constraints=[
@@ -469,7 +477,7 @@ def test_soft_pruning_does_not_duplicate_promoted_constraints_across_rounds():
         reflection_flags=[False] * (num_nodes * 2),
         best_reflection_flags=[False] * (num_nodes * 2),
         num_cluster_nodes=0,
-        stats=SBBUStats(),
+        work=SBBUWork(),
     )
 
     hard_constraints = [
@@ -518,13 +526,12 @@ def test_soft_pruning_does_not_duplicate_promoted_constraints_across_rounds():
     context = RefinementContext(
         state=state,
         config=config,
-        num_nodes=num_nodes,
-        hard_constraints=hard_constraints,
+        constraints=ConstraintSet(num_nodes, hard_constraints),
         check_time_limit=lambda: None,
         run_refinement_solve=lambda candidate_hard_constraints: (
             calls["candidate_sizes"].append(len(candidate_hard_constraints))
             or coordinates.copy(),
-            SBBUStats(),
+            SBBUStage(),
         ),
     )
 
@@ -617,7 +624,7 @@ def test_core_solver_simple_case(simple_tetrahedron, sbbu_config_fast):
     stats = solver.solve()
 
     assert stats.solve_time > 0
-    assert stats.constraints_processed >= 0
+    assert _sbbu_stage(stats).constraints_processed >= 0
     assert stats.mean_distance_error < 1e-6
 
     # Check that all constraints are satisfied
@@ -762,8 +769,8 @@ def test_solver_reentrant_resets_runtime_state_after_mutation(sbbu_config_fast):
     stats_second = solver.solve()
     coords_second = solver.solution_coordinates
 
-    assert stats_second.constraints_processed == 1
-    assert stats_second.iterations_used >= 0
+    assert _sbbu_stage(stats_second).constraints_processed == 1
+    assert _sbbu_stage(stats_second).iterations >= 0
     assert np.allclose(first_snapshot, coords_second)
 
     tolerance = sbbu_config_fast.distance_tolerance
@@ -968,7 +975,7 @@ def test_soft_pruning_checks_time_limit_while_scanning_pairs():
         cluster.start_node = idx
         cluster.end_node = idx
 
-    state = ProblemState(
+    state = SBBUState(
         coordinates=coordinates,
         current_node=num_nodes - 1,
         active_soft_ambiguous_constraints=[
@@ -993,7 +1000,7 @@ def test_soft_pruning_checks_time_limit_while_scanning_pairs():
         reflection_flags=[False] * (num_nodes * 2),
         best_reflection_flags=[False] * (num_nodes * 2),
         num_cluster_nodes=0,
-        stats=SBBUStats(),
+        work=SBBUWork(),
     )
 
     config = SBBUConfig(
@@ -1018,8 +1025,7 @@ def test_soft_pruning_checks_time_limit_while_scanning_pairs():
     context = RefinementContext(
         state=state,
         config=config,
-        num_nodes=num_nodes,
-        hard_constraints=[],
+        constraints=ConstraintSet(num_nodes, []),
         check_time_limit=forced_refiner_timeout,
         run_refinement_solve=lambda _constraints: (_ for _ in ()).throw(
             AssertionError("refinement solve should not run in this test")
@@ -1155,13 +1161,12 @@ def test_remaining_time_budget_raises_when_deadline_is_reached(
     """Remaining budget helper should fail when wall-time reaches the deadline."""
     _, constraint_set = simple_tetrahedron
     solver = SBBUSolver(constraint_set, SBBUConfig(verbose=False))
-    solver._solve_deadline = 42.0
-    solver._solve_time_limit = 1.0
+    solver._budget = SolveBudget(41.0, 42.0)
 
-    monkeypatch.setattr("sbbu.core.solver.get_wall_time", lambda: 42.0)
+    monkeypatch.setattr("sbbu.solving.run.get_wall_time", lambda: 42.0)
 
     with pytest.raises(RuntimeError, match="time exceeded"):
-        solver._remaining_time_budget()
+        solver._check_time_limit()
 
 
 @pytest.mark.unit
@@ -1184,8 +1189,7 @@ def test_solve_checks_timeout_after_refinement_hook(monkeypatch):
     )
 
     def expire_deadline(_context) -> None:
-        solver._solve_deadline = 0.0
-        solver._solve_time_limit = 10.0
+        solver._budget = SolveBudget(0.0, 0.0)
 
     monkeypatch.setattr(solver._soft_pruning_refiner, "run", expire_deadline)
 
