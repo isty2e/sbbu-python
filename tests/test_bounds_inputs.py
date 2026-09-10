@@ -9,7 +9,6 @@ from numpy.typing import NDArray
 import sbbu
 from sbbu.adapters import MatrixAdapter, NMRAdapter
 from sbbu.constraints import ConstraintSet, DistanceConstraint
-from sbbu.core.metrics import MetricsCalculator
 
 
 def triangle_bounds() -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -76,9 +75,7 @@ def test_bounds_matrix_exact_matches_distance_matrix(dtype: str) -> None:
     coordinates, stats = sbbu.solve_from_bounds_matrices(
         distances, distances, verbose=False
     )
-    errors = MetricsCalculator.constraint_errors(
-        actual.get_hard_constraints(), coordinates
-    )
+    errors = actual.constraint_errors(coordinates)
     assert errors.max() < 1e-7
     assert stats.largest_distance_error < 1e-7
 

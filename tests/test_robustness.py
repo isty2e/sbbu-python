@@ -5,12 +5,19 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-import sbbu.core.solver as solver_module
+import sbbu.solving.sbbu.solver as solver_module
 from sbbu import SBBUConfig, SBBUSolver, solve_from_distance_matrix
 from sbbu.adapters import MatrixAdapter
 from sbbu.constraints import ConstraintSet, DistanceConstraint
-from sbbu.core.metrics import MetricsCalculator
-from sbbu.core.types import SBBUTimeoutError
+from sbbu.solving.run import SBBUStage, SolveStats
+from sbbu.solving.sbbu.state import SBBUTimeoutError
+
+
+def _sbbu_stage(stats: SolveStats) -> SBBUStage:
+    assert len(stats.stages) == 1
+    stage = stats.stages[0]
+    assert isinstance(stage, SBBUStage)
+    return stage
 
 
 @pytest.fixture
@@ -148,12 +155,14 @@ def test_interval_and_ambiguous_edges_keep_their_meanings():
 def test_bulk_constraint_errors_match_scalar_semantics(distance):
     constraints = [
         DistanceConstraint(0, 1, 1.5, 1.5),
-        DistanceConstraint(0, 1, 1.0, 2.0),
+        DistanceConstraint(0, 2, 1.0, 2.0),
     ]
-    coordinates = np.array([[0.0, 0.0, 0.0], [distance, 0.0, 0.0]])
+    coordinates = np.array(
+        [[0.0, 0.0, 0.0], [distance, 0.0, 0.0], [distance, 0.0, 0.0]]
+    )
     expected = [c.violation(distance) for c in constraints]
     np.testing.assert_array_equal(
-        MetricsCalculator.constraint_errors(constraints, coordinates), expected
+        ConstraintSet(3, constraints).constraint_errors(coordinates), expected
     )
 
 
@@ -202,7 +211,7 @@ def test_clique_timeout_clears_previous_solution(monkeypatch):
         clock[0] = 2.0
         yield points
 
-    monkeypatch.setattr(solver_module, "get_wall_time", lambda: clock[0])
+    monkeypatch.setattr("sbbu.solving.run.get_wall_time", lambda: clock[0])
     monkeypatch.setattr(solver_module, "clique_realizations", expired_candidate)
     with pytest.raises(SBBUTimeoutError):
         solver.solve()
@@ -237,7 +246,7 @@ def test_sparse_long_span_stops_only_after_global_feasibility(
     coordinates = solver.solution_coordinates
     known = np.isfinite(supplied)
     assert np.max(np.abs(distances_of(coordinates)[known] - supplied[known])) <= 1e-7
-    assert stats.iterations_used <= 3
+    assert _sbbu_stage(stats).iterations <= 3
 
 
 @pytest.mark.parametrize("failure", [ValueError, RuntimeError, SBBUTimeoutError])

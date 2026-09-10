@@ -133,7 +133,7 @@ def test_noisy_data_robustness():
     edges = []
     for i in range(n):
         for j in range(i + 1, n):
-            true_dist = np.linalg.norm(true_coords[i] - true_coords[j])
+            true_dist = float(np.linalg.norm(true_coords[i] - true_coords[j]))
             noise = rng.normal(0, noise_level * true_dist)
             noisy_dist = max(0.1, true_dist + noise)
             edges.append((i, j, noisy_dist, noisy_dist))
@@ -180,14 +180,14 @@ def test_sparse_connectivity():
     # Sequential connectivity (required)
     for i in range(n - 1):
         for j in range(i + 1, min(i + 4, n)):
-            dist = np.linalg.norm(true_coords[i] - true_coords[j])
+            dist = float(np.linalg.norm(true_coords[i] - true_coords[j]))
             edges.append((i, j, dist, dist))
 
     # Add minimal long-range constraints (geometrically feasible)
     long_range_pairs = [(0, 5), (1, 6), (2, 7)]
     for i, j in long_range_pairs:
         if j < n:
-            dist = np.linalg.norm(true_coords[i] - true_coords[j])
+            dist = float(np.linalg.norm(true_coords[i] - true_coords[j]))
             edges.append((i, j, dist, dist))
 
     coords, stats = sbbu.solve_from_edge_list(n, edges, verbose=False)
