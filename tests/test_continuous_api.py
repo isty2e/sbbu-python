@@ -51,6 +51,7 @@ def test_all_entrypoints_prefer_applicable_sbbu(exact_entrypoints, monkeypatch, 
         raise AssertionError("Continuous backend entered for applicable SBBU")
 
     monkeypatch.setattr(operation, "solve_continuous", forbidden)
+    monkeypatch.setattr(operation, "find_order", forbidden)
     for entrypoint in exact_entrypoints:
         coordinates, stats = entrypoint(method)
         assert coordinates.shape == (4, 3)
@@ -100,7 +101,13 @@ def test_missing_edges_are_valid_but_continuous_support_is_temporary():
         operation.solve(problem, 1e-7, 1.0, False, "trf")
 
 
-def test_positive_width_complete_inputs_across_bounds_edges_and_nmr(tmp_path):
+def test_positive_width_complete_inputs_across_bounds_edges_and_nmr(
+    tmp_path, monkeypatch
+):
+    def forbidden(*args):
+        raise AssertionError("Positive-width-only input entered ordering")
+
+    monkeypatch.setattr(operation, "find_order", forbidden)
     rng = np.random.RandomState(91)
     witness = rng.normal(size=(8, 3))
     distances = np.linalg.norm(witness[:, None] - witness[None, :], axis=-1)

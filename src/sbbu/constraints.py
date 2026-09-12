@@ -338,6 +338,62 @@ class ConstraintSet:
         """
         return float(np.max(self.constraint_errors(coordinates), initial=0.0))
 
+    def reordered(self, order: Sequence[int]) -> "ConstraintSet":
+        """Copy all observations into a different node order.
+
+        Parameters
+        ----------
+        order : Sequence[int]
+            Original node indices in the new order, each appearing exactly once.
+            Indices must be Python integers, not booleans.
+
+        Returns
+        -------
+        ConstraintSet
+            Independent observations with unchanged bounds and hard/soft meaning.
+            Packed-only inputs remain packed without scalar pair materialization.
+
+        Raises
+        ------
+        ValueError
+            The supplied indices are not a permutation of all original nodes.
+        """
+        if (
+            len(order) != self.num_nodes
+            or any(
+                isinstance(node, bool) or not isinstance(node, int) for node in order
+            )
+            or sorted(order) != list(range(self.num_nodes))
+        ):
+            raise ValueError("order must be a permutation of all original node indices")
+        inverse = np.empty(self.num_nodes, dtype=np.intp)
+        inverse[np.asarray(order, dtype=np.intp)] = np.arange(self.num_nodes)
+
+        if self._observations is not None:
+            observations = []
+            for constraint in self._observations:
+                first, second = int(inverse[constraint.i]), int(inverse[constraint.j])
+                observations.append(
+                    DistanceConstraint(
+                        min(first, second),
+                        max(first, second),
+                        constraint.lower_bound,
+                        constraint.upper_bound,
+                    )
+                )
+            return ConstraintSet(self.num_nodes, observations)
+
+        first, second = inverse[self._rows], inverse[self._columns]
+        rows, columns = np.minimum(first, second), np.maximum(first, second)
+        indices = np.lexsort((columns, rows))
+        return ConstraintSet.from_bounds_arrays(
+            self.num_nodes,
+            rows[indices],
+            columns[indices],
+            self._lower[indices],
+            self._upper[indices],
+        )
+
     def bounds_matrices(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Project complete hard bounds into two new symmetric matrices.
 
