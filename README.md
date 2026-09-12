@@ -81,14 +81,21 @@ Choose `method` by keyword in any of the four `solve_from_*` functions:
 | `"trf"` | TRF refinement |
 
 **SBBU always takes precedence** when the input order provides exact, unambiguous
-distances for every pair with `1 <= j - i <= 3`. Nodes are not reordered
-automatically, and a failed SBBU run is not retried with another solver.
+distances for every pair with `1 <= j - i <= 3`. If that condition fails, the
+high-level functions can search the exact edges for another SBBU order. The search
+has a nominal limit of 50 ms or 5% of `max_time`, whichever is smaller, including
+graph preparation, and a separate work limit. It may miss valid orders.
+
+A discovered SBBU order also takes precedence over `method`. Returned coordinates
+retain the original node order. A failed SBBU run is not retried with another order
+or solver. Errors with internal node indices include the working-to-input node map.
 
 SBBU allows long-range distances to be missing or interval-valued. MM and TRF
 currently require at least four nodes, a complete unambiguous graph, and
 strictly positive-width intervals on every pair. They cannot yet solve
 missing-edge inputs, though the input formats allow them. Mixed exact/interval
-observations and ambiguous alternatives require SBBU's exact predecessors.
+observations and ambiguous alternatives require SBBU's exact predecessors in the
+supplied or discovered order.
 
 Valid inputs may still fail to solve. Failure, stationarity, or a time limit does
 not prove that no realization exists.
@@ -113,8 +120,8 @@ for stage in stats.stages:
 
 - `distance_tolerance`: maximum absolute violation allowed for an original hard
   bound. Input intervals are unchanged.
-- `max_time`: time limit for numerical solving and final validation, excluding
-  input parsing and normalization. Calls may overrun this cooperative limit, but
+- `max_time`: time limit including ordering, numerical solving and final validation,
+  excluding input parsing and normalization. Calls may overrun this cooperative limit, but
   no result is returned if the deadline check fails.
 - `verbose`: SBBU progress logging.
 
@@ -148,6 +155,9 @@ solver = SBBUSolver(constraints, SBBUConfig(distance_tolerance=1e-7, verbose=Fal
 stats = solver.solve()
 coordinates = solver.solution_coordinates
 ```
+
+Direct `SBBUSolver` use requires the supplied node order to satisfy its predecessor
+conditions; automatic ordering is available through the `solve_from_*` functions.
 
 For custom observations, create
 `DistanceConstraint(i, j, lower_bound, upper_bound)` objects and collect them in a

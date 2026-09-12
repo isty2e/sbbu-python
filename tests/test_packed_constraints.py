@@ -42,6 +42,71 @@ def test_bulk_and_observation_construction_agree():
             column.flags.writeable = True
 
 
+@pytest.mark.parametrize("packed", [False, True])
+def test_reordering_preserves_bounds_and_original_indices(packed, monkeypatch):
+    observations = [
+        DistanceConstraint(0, 1, 1.0, 1.0),
+        DistanceConstraint(0, 3, 2.0, np.nextafter(2.0, 3.0)),
+        DistanceConstraint(1, 2, 3.0, 4.0),
+    ]
+    problem = ConstraintSet(5, observations)
+    if packed:
+        problem = ConstraintSet.from_bounds_arrays(
+            5, problem.rows, problem.columns, problem.lower_bounds, problem.upper_bounds
+        )
+
+        def forbidden(*args):
+            raise AssertionError("Packed reordering constructed scalar observations")
+
+        monkeypatch.setattr("sbbu.constraints.DistanceConstraint", forbidden)
+    order = [2, 4, 1, 0, 3]
+    inverse = np.argsort(order).tolist()
+    reordered = problem.reordered(order)
+    restored = reordered.reordered(inverse)
+    for name in ("rows", "columns", "lower_bounds", "upper_bounds"):
+        np.testing.assert_array_equal(getattr(restored, name), getattr(problem, name))
+        assert not np.shares_memory(getattr(reordered, name), getattr(problem, name))
+    points = np.random.RandomState(63).normal(size=(5, 3))
+    assert reordered.maximum_violation(points[order]) == problem.maximum_violation(
+        points
+    )
+    assert np.any(reordered.lower_bounds < reordered.upper_bounds)
+
+
+def test_reordering_preserves_raw_duplicates_soft_alternatives_and_input_snapshot():
+    observations = [
+        DistanceConstraint(0, 1, 1.0, 3.0),
+        DistanceConstraint(0, 1, 2.0, 4.0),
+        DistanceConstraint(0, 2, 1.0, 1.1),
+        DistanceConstraint(0, 2, 2.0, 2.1),
+    ]
+    problem = ConstraintSet(4, observations)
+    reordered = problem.reordered([2, 0, 3, 1])
+    assert reordered.constraints == [
+        DistanceConstraint(1, 3, 1.0, 3.0),
+        DistanceConstraint(1, 3, 2.0, 4.0),
+        DistanceConstraint(0, 1, 1.0, 1.1),
+        DistanceConstraint(0, 1, 2.0, 2.1),
+    ]
+    assert reordered.get_hard_constraints() == [DistanceConstraint(1, 3, 2.0, 3.0)]
+    assert reordered.get_soft_ambiguous_constraints() == [
+        (
+            (0, 1),
+            [DistanceConstraint(0, 1, 1.0, 1.1), DistanceConstraint(0, 1, 2.0, 2.1)],
+        )
+    ]
+    reordered.constraints.clear()
+    assert problem.constraints == observations
+
+
+@pytest.mark.parametrize(
+    "order", [[0, 1], [0, 1, 1], [0, 1, 3], [-1, 0, 1], [False, 1, 2], [0.0, 1, 2]]
+)
+def test_reordering_rejects_nonpermutations(order):
+    with pytest.raises(ValueError, match="permutation"):
+        ConstraintSet(3, []).reordered(order)
+
+
 def test_original_observations_and_disjoint_alternatives_are_snapshots():
     observations = [
         DistanceConstraint(0, 1, 1.0, 3.0),
